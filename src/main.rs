@@ -8,18 +8,70 @@
 
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// JDK distros jolta knows how to download. The default is temurin.
+const INSTALLABLE_VENDORS: [&str; 4] = ["temurin", "corretto", "graalvm", "oracle"];
+/// Vendors recognized for pinning/matching (superset of the installable ones).
+const KNOWN_VENDORS: [&str; 6] = ["temurin", "corretto", "graalvm", "oracle", "zulu", "openjdk"];
+
+// ------------------------------------------------------------------ ui
+
+fn tty(err: bool) -> bool {
+    static OUT: OnceLock<bool> = OnceLock::new();
+    static ERR: OnceLock<bool> = OnceLock::new();
+    let plain = env::var_os("NO_COLOR").is_some()
+        || env::var("TERM").is_ok_and(|t| t == "dumb");
+    if err {
+        *ERR.get_or_init(|| io::stderr().is_terminal() && !plain)
+    } else {
+        *OUT.get_or_init(|| io::stdout().is_terminal() && !plain)
+    }
+}
+
+fn paint(code: &str, s: &str, err: bool) -> String {
+    if tty(err) {
+        format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
+}
+
+fn bold(s: &str) -> String { paint("1", s, false) }
+fn dim(s: &str) -> String { paint("2", s, false) }
+fn green(s: &str) -> String { paint("32", s, false) }
+fn red(s: &str) -> String { paint("31", s, false) }
+fn yellow(s: &str) -> String { paint("33", s, false) }
+fn cyan(s: &str) -> String { paint("36", s, false) }
+
+fn ok_mark() -> String { green("✓") }
+fn bad_mark() -> String { red("✗") }
+fn warn_mark() -> String { yellow("!") }
+
 fn die(msg: &str) -> ! {
-    eprintln!("jolta: {msg}");
+    eprintln!("{} {msg}", paint("31", "jolta:", true));
     exit(1);
 }
+
+fn fmt_bytes(b: u64) -> String {
+    if b >= 1_000_000_000 {
+        format!("{:.1} GB", b as f64 / 1e9)
+    } else if b >= 1_000_000 {
+        format!("{:.1} MB", b as f64 / 1e6)
+    } else {
+        format!("{} kB", b / 1000)
+    }
+}
+
+// ------------------------------------------------------------------ paths
 
 fn home_dir() -> PathBuf {
     PathBuf::from(env::var("HOME").unwrap_or_else(|_| die("HOME is not set")))
@@ -31,29 +83,42 @@ fn jolta_home() -> PathBuf {
         .unwrap_or_else(|_| home_dir().join(".jolta"))
 }
 
-// ---------------------------------------------------------------- versions
+fn shims_dir() -> PathBuf {
+    jolta_home().join("shims")
+}
 
-/// Major version of a spec: "21"->21, "21.0.4"->21, "1.8"->8, "temurin-21"->21.
-fn major_of(spec: &str) -> Option<u32> {
-    let mut s = spec.trim();
-    if let Some(idx) = s.rfind('-') {
-        let tail = &s[idx + 1..];
-        if tail.starts_with(|c: char| c.is_ascii_digit()) {
-            s = tail;
+// ------------------------------------------------------------------ versions
+
+/// Split a spec into (vendor, version): "corretto@21" / "corretto-21" ->
+/// (Some("corretto"), "21"); "21.0.4" -> (None, "21.0.4").
+fn parse_spec(spec: &str) -> (Option<&'static str>, String) {
+    let s = spec.trim();
+    for sep in ['@', '-'] {
+        if let Some((head, tail)) = s.split_once(sep) {
+            let head_lc = head.to_ascii_lowercase();
+            if let Some(v) = KNOWN_VENDORS.iter().find(|v| **v == head_lc) {
+                return (Some(v), tail.to_string());
+            }
         }
     }
-    let first: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    (None, s.to_string())
+}
+
+/// Major version of a version string: "21"->21, "21.0.4"->21, "1.8"->8.
+fn major_of(version: &str) -> Option<u32> {
+    let (_, v) = parse_spec(version); // tolerate full specs too
+    let first: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
     let first: u32 = first.parse().ok()?;
     if first == 1 {
         // legacy "1.8" style
-        let rest = s.split('.').nth(1)?;
+        let rest = v.split('.').nth(1)?;
         let second: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         return second.parse().ok();
     }
     Some(first)
 }
 
-/// Sortable key from "21.0.4+7" -> 21_000_004 etc. (matches the awk numkey).
+/// Sortable key from "21.0.4+7" -> 21_000_004 etc.
 fn numkey(version: &str) -> u64 {
     let v = version
         .split(|c| c == '+' || c == '_' || c == '-')
@@ -66,7 +131,7 @@ fn numkey(version: &str) -> u64 {
     a * 1_000_000 + b * 1_000 + c
 }
 
-// ---------------------------------------------------------------- discovery
+// ------------------------------------------------------------------ discovery
 
 /// Full JAVA_VERSION from a JDK home's release file.
 fn jdk_version(home: &Path) -> Option<String> {
@@ -75,6 +140,49 @@ fn jdk_version(home: &Path) -> Option<String> {
         if let Some(rest) = line.strip_prefix("JAVA_VERSION=\"") {
             return Some(rest.trim_end_matches('"').to_string());
         }
+    }
+    None
+}
+
+/// Which distro a JDK home is, from its release IMPLEMENTOR or its path.
+fn vendor_of(home: &Path) -> Option<&'static str> {
+    let release = fs::read_to_string(home.join("release")).unwrap_or_default();
+    let mut implementor = String::new();
+    for line in release.lines() {
+        if line.starts_with("GRAALVM_VERSION") {
+            return Some("graalvm");
+        }
+        if let Some(rest) = line.strip_prefix("IMPLEMENTOR=\"") {
+            implementor = rest.trim_end_matches('"').to_string();
+        }
+    }
+    let imp = implementor.to_ascii_lowercase();
+    if imp.contains("amazon") {
+        return Some("corretto");
+    }
+    if imp.contains("adoptium") || imp.contains("temurin") || imp.contains("eclipse") {
+        return Some("temurin");
+    }
+    if imp.contains("azul") {
+        return Some("zulu");
+    }
+    if imp.contains("homebrew") {
+        return Some("openjdk");
+    }
+    if imp.contains("oracle") {
+        return Some("oracle");
+    }
+    let path = home.to_string_lossy().to_ascii_lowercase();
+    for v in ["corretto", "temurin", "zulu", "oracle"] {
+        if path.contains(v) {
+            return KNOWN_VENDORS.iter().find(|k| **k == v).copied();
+        }
+    }
+    if path.contains("graal") {
+        return Some("graalvm");
+    }
+    if path.contains("openjdk") {
+        return Some("openjdk");
     }
     None
 }
@@ -151,18 +259,29 @@ fn list_all() -> Vec<(String, PathBuf)> {
     all
 }
 
-// ---------------------------------------------------------------- resolution
+// ------------------------------------------------------------------ resolution
 
-/// Best home for a major: exact full-version match wins, else highest build.
+/// Best home for a spec: filter by major (and distro when the spec names one,
+/// e.g. "corretto-21"); exact full-version match wins, else highest build.
 /// Managed JDKs come first in `candidates`, matching the sh implementation.
-fn best_match(candidates: &[(String, PathBuf)], major: u32, spec: &str) -> Option<PathBuf> {
+fn best_match(
+    candidates: &[(String, PathBuf)],
+    vendor: Option<&str>,
+    major: u32,
+    version: &str,
+) -> Option<PathBuf> {
     let mut best: Option<(u64, &PathBuf)> = None;
     let mut exact: Option<&PathBuf> = None;
     for (v, home) in candidates {
         if major_of(v) != Some(major) {
             continue;
         }
-        if v == spec {
+        if let Some(want) = vendor {
+            if vendor_of(home) != Some(want) {
+                continue;
+            }
+        }
+        if v == version {
             exact = Some(home);
         }
         let k = numkey(v);
@@ -189,7 +308,8 @@ fn clear_cache() {
 /// NOTE: java_home -v is unusable as a fallback — it exits 0 and prints its
 /// default JDK even when nothing matches — so matching is strict, list-based.
 fn resolve(spec: &str) -> Option<PathBuf> {
-    let major = major_of(spec)?;
+    let (vendor, version) = parse_spec(spec);
+    let major = major_of(&version)?;
     let cache = cache_path(spec);
     if let Ok(cached) = fs::read_to_string(&cache) {
         let home = PathBuf::from(cached.trim());
@@ -198,7 +318,7 @@ fn resolve(spec: &str) -> Option<PathBuf> {
         }
         let _ = fs::remove_file(&cache);
     }
-    let home = best_match(&list_all(), major, spec)?;
+    let home = best_match(&list_all(), vendor, major, &version)?;
     if !home.join("bin/java").is_file() {
         return None;
     }
@@ -275,12 +395,23 @@ fn try_auto_install(spec: &str) -> bool {
     if env::var("JOLTA_NO_AUTO_INSTALL").is_ok() {
         return false;
     }
-    let Some(major) = major_of(spec) else { return false };
+    let (vendor, version) = parse_spec(spec);
+    let vendor = vendor.unwrap_or("temurin");
+    let Some(major) = major_of(&version) else { return false };
+    if !INSTALLABLE_VENDORS.contains(&vendor) {
+        eprintln!(
+            "{} cannot auto-install '{vendor}' builds (downloadable distros: {})",
+            paint("33", "jolta:", true),
+            INSTALLABLE_VENDORS.join(", ")
+        );
+        return false;
+    }
     eprintln!(
-        "jolta: Java {spec} is pinned here but not installed — fetching Temurin {major} \
-         (set JOLTA_NO_AUTO_INSTALL=1 to disable)"
+        "{} Java {spec} is pinned here but not installed — fetching {vendor} {major} {}",
+        paint("33", "jolta:", true),
+        paint("2", "(set JOLTA_NO_AUTO_INSTALL=1 to disable)", true)
     );
-    install_major(major).is_ok()
+    install_vendor_major(vendor, major).is_ok()
 }
 
 struct Resolved {
@@ -298,14 +429,20 @@ fn resolve_current(auto_install: bool) -> Resolved {
             }
             let home = home.unwrap_or_else(|| {
                 let installed: Vec<String> = {
-                    let mut vs: Vec<String> = list_all().into_iter().map(|(v, _)| v).collect();
+                    let mut vs: Vec<String> = list_all()
+                        .into_iter()
+                        .map(|(v, h)| match vendor_of(&h) {
+                            Some(ven) => format!("{ven}-{v}"),
+                            None => v,
+                        })
+                        .collect();
                     vs.sort();
                     vs.dedup();
                     vs
                 };
                 die(&format!(
                     "no installed JDK matches '{spec}' (pinned by {})\n  installed JDKs: {}\n  \
-                     run 'jolta install {spec}' to download it (Temurin), or 'jolta list' to see what's available",
+                     run 'jolta install {spec}' to download it, or 'jolta list' to see what's available",
                     pin.source,
                     installed.join(" ")
                 ));
@@ -324,7 +461,7 @@ fn resolve_current(auto_install: bool) -> Resolved {
     }
 }
 
-// ---------------------------------------------------------------- shim mode
+// ------------------------------------------------------------------ shim mode
 
 fn run_shim(tool: &str, args: Vec<String>) -> ! {
     let r = resolve_current(true);
@@ -343,41 +480,162 @@ fn run_shim(tool: &str, args: Vec<String>) -> ! {
     die(&format!("failed to exec {}: {err}", bin.display()));
 }
 
-// ---------------------------------------------------------------- commands
+// ------------------------------------------------------------------ download
+
+/// Content length of the final target of `url`, if the server reports one.
+/// (Last Content-Length header across the redirect chain wins.)
+fn content_length(url: &str) -> Option<u64> {
+    let o = Command::new("curl").args(["-sIL"]).arg(url).output().ok()?;
+    let headers = String::from_utf8_lossy(&o.stdout);
+    let mut len = None;
+    for line in headers.lines() {
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                if let Ok(v) = value.trim().parse::<u64>() {
+                    len = Some(v);
+                }
+            }
+        }
+    }
+    len
+}
+
+/// Download with an animated progress bar (spinner + bar + MB + throughput)
+/// when stderr is a terminal; plain single-line logging otherwise.
+fn download(url: &str, dest: &Path, label: &str) -> bool {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const BAR: usize = 24;
+
+    let total = content_length(url).filter(|t| *t > 0);
+    let mut child = match Command::new("curl")
+        .args(["-fsSL", "-o"])
+        .arg(dest)
+        .arg(url)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{} cannot run curl: {e}", paint("31", "jolta:", true));
+            return false;
+        }
+    };
+
+    let started = Instant::now();
+    let fancy = tty(true);
+    if !fancy {
+        eprintln!(
+            "jolta: downloading {label}{}",
+            total.map(|t| format!(" ({})", fmt_bytes(t))).unwrap_or_default()
+        );
+    }
+    let mut frame = 0usize;
+    let mut last_bytes = 0u64;
+    let mut last_t = started;
+    let mut speed = 0f64;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => {}
+            Err(e) => die(&format!("curl: {e}")),
+        }
+        if fancy {
+            let bytes = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+            let now = Instant::now();
+            let dt = now.duration_since(last_t).as_secs_f64();
+            if dt > 0.5 {
+                speed = (bytes.saturating_sub(last_bytes)) as f64 / dt;
+                last_bytes = bytes;
+                last_t = now;
+            }
+            let (bar, pct) = match total {
+                Some(t) => {
+                    let done = ((bytes as f64 / t as f64) * BAR as f64) as usize;
+                    let done = done.min(BAR);
+                    (
+                        format!("{}{}", "█".repeat(done), "░".repeat(BAR - done)),
+                        format!("{:>3.0}%", bytes as f64 / t as f64 * 100.0),
+                    )
+                }
+                None => ("░".repeat(BAR), "  ?%".into()),
+            };
+            let speed_s = if speed > 0.0 {
+                format!("  {}/s", fmt_bytes(speed as u64))
+            } else {
+                String::new()
+            };
+            eprint!(
+                "\r\x1b[2K  \x1b[36m{}\x1b[0m {label}  \x1b[36m{bar}\x1b[0m {pct}  {}{}\x1b[2m{speed_s}\x1b[0m ",
+                FRAMES[frame % FRAMES.len()],
+                fmt_bytes(bytes),
+                total.map(|t| format!(" / {}", fmt_bytes(t))).unwrap_or_default()
+            );
+            let _ = io::stderr().flush();
+            frame += 1;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    let bytes = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+    if fancy {
+        eprint!("\r\x1b[2K");
+    }
+    if status.success() {
+        eprintln!(
+            "  {} downloaded {label}  {}",
+            paint("32", "✓", true),
+            paint(
+                "2",
+                &format!("{} in {:.1}s", fmt_bytes(bytes), started.elapsed().as_secs_f64()),
+                true
+            )
+        );
+        true
+    } else {
+        eprintln!("  {} download failed for {label}", paint("31", "✗", true));
+        false
+    }
+}
+
+// ------------------------------------------------------------------ commands
 
 fn usage() {
     print!(
-        "jolta — automatic per-project JDK switching (like Volta, for Java)
+        "{} — automatic per-project JDK switching (like Volta, for Java)
 
-Usage: jolta <command> [args]
+{}: jolta <command> [args]
 
-  setup                Install shims and add jolta to your shell profile
-  pin <version>        Pin a Java version for this project (.java-version)
-  default <version>    Set the global fallback Java version
-  install <major>      Download and install a Temurin JDK (e.g. jolta install 21)
-  uninstall <name>     Remove a jolta-managed JDK (see 'jolta list' for names)
-  list, ls             List installed JDKs and where they come from
-  jdks                 Machine-readable list: major<TAB>version<TAB>home
-  current              Show the Java version resolved for this directory
-  which [tool]         Show the full path the shim would exec (default: java)
-  exec <cmd> [args]    Run a command with JAVA_HOME and PATH set for this project
-  env                  Print export statements for eval in scripts
-  home                 Print the resolved JAVA_HOME for this directory
-  hook [zsh|bash]      Print shell hook code that keeps JAVA_HOME in sync on cd
-  reshim               Regenerate shims from installed JDKs
-  doctor               Diagnose common setup problems
-  implode              Uninstall jolta completely (~/.jolta + shell profile lines)
-  version              Print jolta's version
+  setup                  Install shims and add jolta to your shell profile
+  pin <spec>             Pin a Java version for this project (.java-version)
+  default <spec>         Set the global fallback Java version
+  install <spec>         Download a JDK (e.g. 21, corretto@21, graalvm@25)
+  uninstall <name>       Remove a jolta-managed JDK (see 'jolta list' for names)
+  list, ls               List installed JDKs and where they come from
+  jdks                   Machine-readable list: major<TAB>version<TAB>distro<TAB>home
+  current                Show the Java version resolved for this directory
+  which [tool]           Show the full path the shim would exec (default: java)
+  exec <cmd> [args]      Run a command with JAVA_HOME and PATH set for this project
+  env                    Print export statements for eval in scripts
+  home                   Print the resolved JAVA_HOME for this directory
+  hook [zsh|bash]        Print shell hook code that keeps JAVA_HOME in sync on cd
+  reshim                 Regenerate shims from installed JDKs
+  doctor                 Diagnose common setup problems
+  implode                Uninstall jolta completely (~/.jolta + shell profile lines)
+  version                Print jolta's version
+
+A <spec> is a version with an optional distro {}:
+  21   21.0.4   1.8   corretto@21   graalvm-25   temurin@8
+Downloadable distros: {} (default temurin).
+Distro-less pins match any installed JDK of that major version.
 
 Version resolution order:
   JOLTA_JAVA_VERSION env var  >  nearest .java-version (walking up)  >
   jolta default  >  system default JDK
-"
+",
+        bold("jolta"),
+        bold("Usage"),
+        dim("(distro@version or distro-version)"),
+        cyan(&INSTALLABLE_VENDORS.join(", "))
     );
-}
-
-fn shims_dir() -> PathBuf {
-    jolta_home().join("shims")
 }
 
 fn cmd_reshim() {
@@ -409,7 +667,7 @@ fn cmd_reshim() {
         }
     }
     clear_cache();
-    println!("jolta: {count} shims in {}", shims.display());
+    println!("{} {count} shims in {}", ok_mark(), shims.display());
 }
 
 fn profile_file() -> PathBuf {
@@ -442,7 +700,12 @@ fn cmd_setup() {
         let _ = fs::remove_file(&installed);
         fs::copy(&me, &installed).unwrap_or_else(|e| die(&format!("cannot install to {}: {e}", installed.display())));
         let _ = fs::set_permissions(&installed, fs::Permissions::from_mode(0o755));
-        println!("jolta: installed to {} (this checkout is no longer needed at runtime)", home.display());
+        println!(
+            "{} installed to {} {}",
+            ok_mark(),
+            home.display(),
+            dim("(this checkout is no longer needed at runtime)")
+        );
         // reshim via the installed copy so shims point at it
         let st = Command::new(&installed).arg("reshim").status();
         if !st.is_ok_and(|s| s.success()) {
@@ -456,21 +719,21 @@ fn cmd_setup() {
     let existing = fs::read_to_string(&profile).unwrap_or_default();
     let mut additions = String::new();
     if existing.contains(">>> jolta >>>") {
-        println!("jolta: PATH setup already in {}", profile.display());
+        println!("{} PATH setup already in {}", ok_mark(), profile.display());
     } else {
         additions.push_str(
             "\n# >>> jolta >>>\nexport JOLTA_HOME=\"$HOME/.jolta\"\nexport PATH=\"$JOLTA_HOME/shims:$JOLTA_HOME/bin:$PATH\"\n# <<< jolta <<<\n",
         );
-        println!("jolta: added PATH setup to {}", profile.display());
+        println!("{} added PATH setup to {}", ok_mark(), profile.display());
     }
     if existing.contains("jolta hook") {
-        println!("jolta: JAVA_HOME hook already in {}", profile.display());
+        println!("{} JAVA_HOME hook already in {}", ok_mark(), profile.display());
     } else {
         additions.push_str(&format!(
             "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\neval \"$(jolta hook {})\"\n# <<< jolta hook <<<\n",
             shell_name()
         ));
-        println!("jolta: added JAVA_HOME hook to {}", profile.display());
+        println!("{} added JAVA_HOME hook to {}", ok_mark(), profile.display());
     }
     if !additions.is_empty() {
         let mut f = fs::OpenOptions::new()
@@ -481,34 +744,50 @@ fn cmd_setup() {
         f.write_all(additions.as_bytes())
             .unwrap_or_else(|e| die(&format!("cannot write {}: {e}", profile.display())));
     }
-    println!("jolta: setup complete (open a new shell to activate)");
+    println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
 }
 
 fn cmd_pin(spec: &str) {
     if resolve(spec).is_none() {
-        if env::var("JOLTA_NO_AUTO_INSTALL").is_err() && which("curl").is_some() {
-            eprintln!("jolta: no installed JDK matches '{spec}' — fetching it now");
-            if let Some(major) = major_of(spec) {
-                if install_major(major).is_err() {
-                    eprintln!("jolta: warning: install failed; pin written anyway ('jolta install {spec}' to retry)");
-                }
+        let (vendor, version) = parse_spec(spec);
+        let vendor = vendor.unwrap_or("temurin");
+        if env::var("JOLTA_NO_AUTO_INSTALL").is_err()
+            && INSTALLABLE_VENDORS.contains(&vendor)
+            && major_of(&version).is_some()
+        {
+            eprintln!(
+                "{} no installed JDK matches '{spec}' — fetching it now",
+                paint("33", "jolta:", true)
+            );
+            let major = major_of(&version).unwrap();
+            if install_vendor_major(vendor, major).is_err() {
+                eprintln!(
+                    "{} install failed; pin written anyway ('jolta install {spec}' to retry)",
+                    paint("33", "jolta: warning:", true)
+                );
             }
         } else {
-            eprintln!("jolta: warning: no installed JDK currently matches '{spec}' ('jolta install {spec}' to fetch it)");
+            eprintln!(
+                "{} no installed JDK currently matches '{spec}' ('jolta install {spec}' to fetch it)",
+                paint("33", "jolta: warning:", true)
+            );
         }
     }
     fs::write(".java-version", format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write .java-version: {e}")));
     let cwd = env::current_dir().unwrap_or_default();
-    println!("jolta: pinned Java {spec} in {}/.java-version", cwd.display());
+    println!("{} pinned Java {} in {}/.java-version", ok_mark(), bold(spec), cwd.display());
 }
 
 fn cmd_default(spec: &str) {
     if resolve(spec).is_none() {
-        eprintln!("jolta: warning: no installed JDK currently matches '{spec}'");
+        eprintln!(
+            "{} no installed JDK currently matches '{spec}'",
+            paint("33", "jolta: warning:", true)
+        );
     }
     let _ = fs::create_dir_all(jolta_home());
     fs::write(jolta_home().join("default"), format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write default: {e}")));
-    println!("jolta: default Java version set to {spec}");
+    println!("{} default Java version set to {}", ok_mark(), bold(spec));
 }
 
 fn cmd_list() {
@@ -517,26 +796,54 @@ fn cmd_list() {
         Some(spec) => resolve(spec),
         None => system_default(),
     };
-    let mark = |h: &PathBuf| if Some(h) == current.as_ref() { "*" } else { " " };
-    println!("jolta-managed ({}/jdks):", jolta_home().display());
+    let row = |v: &str, h: &PathBuf| {
+        let active = Some(h) == current.as_ref();
+        let vendor = vendor_of(h).unwrap_or("?");
+        if active {
+            format!(
+                "  {} {}",
+                green("*"),
+                bold(&format!("{:<12} {:<9} {}", v, vendor, h.display()))
+            )
+        } else {
+            format!(
+                "    {v:<12} {} {}",
+                cyan(&format!("{vendor:<9}")),
+                dim(&h.display().to_string())
+            )
+        }
+    };
+    println!(
+        "{} {}:",
+        bold("jolta-managed"),
+        dim(&format!("({}/jdks)", jolta_home().display()))
+    );
     let managed = list_managed();
     if managed.is_empty() {
-        println!("   (none — use \"jolta install <major>\")");
+        println!("    {}", dim("(none — use \"jolta install <spec>\")"));
     } else {
         for (v, h) in &managed {
-            println!("  {} {:<12} {}", mark(h), v, h.display());
+            println!("{}", row(v, h));
         }
     }
-    println!("system:");
+    println!("{}:", bold("system"));
     let mut system = list_system();
     system.sort();
     system.dedup();
     for (v, h) in &system {
-        println!("  {} {:<12} {}", mark(h), v, h.display());
+        println!("{}", row(v, h));
     }
     match &pin.spec {
-        Some(spec) => println!("\n* = active here (pinned '{spec}' by {})", pin.source),
-        None => println!("\n* = active here (system default; nothing pinned)"),
+        Some(spec) => println!(
+            "\n{} = active here {}",
+            green("*"),
+            dim(&format!("(pinned '{spec}' by {})", pin.source))
+        ),
+        None => println!(
+            "\n{} = active here {}",
+            green("*"),
+            dim("(system default; nothing pinned)")
+        ),
     }
 }
 
@@ -546,7 +853,7 @@ fn cmd_jdks() {
     all.dedup();
     for (v, h) in all {
         if let Some(m) = major_of(&v) {
-            println!("{m}\t{v}\t{}", h.display());
+            println!("{m}\t{v}\t{}\t{}", vendor_of(&h).unwrap_or("?"), h.display());
         }
     }
 }
@@ -554,7 +861,8 @@ fn cmd_jdks() {
 fn cmd_current() {
     let r = resolve_current(false);
     let v = jdk_version(&r.home).unwrap_or_else(|| "unknown".into());
-    println!("{v} (from {})", r.source);
+    let vendor = vendor_of(&r.home).map(|s| format!(" ({s})")).unwrap_or_default();
+    println!("{}{} {}", bold(&v), cyan(&vendor), dim(&format!("(from {})", r.source)));
     println!("{}", r.home.display());
 }
 
@@ -616,45 +924,38 @@ fn which(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn install_major(major: u32) -> Result<(), ()> {
-    let os = match env::consts::OS {
-        "macos" => "mac",
-        "linux" => "linux",
-        other => die(&format!("unsupported OS: {other}")),
-    };
+/// Download URL for the latest GA build of a distro + major on this platform.
+fn vendor_url(vendor: &str, major: u32) -> String {
+    let os = if env::consts::OS == "macos" { "macos" } else { "linux" };
     let arch = match env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x64",
         other => die(&format!("unsupported architecture: {other}")),
     };
-
-    // Serialize concurrent installs of the same major (parallel builds can
-    // fire several shims at once); whoever loses the race waits, then re-checks.
-    let _ = fs::create_dir_all(jolta_home().join("cache"));
-    let lock = jolta_home().join("cache").join(format!("install-{major}.lock"));
-    let lock_guard = match fs::create_dir(&lock) {
-        Ok(()) => Some(LockGuard(lock.clone())),
-        Err(_) => {
-            println!("jolta: another install of Temurin {major} is running; waiting...");
-            let mut waited = 0;
-            while lock.is_dir() && waited < 600 {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                waited += 2;
-            }
-            if resolve(&major.to_string()).is_some() {
-                println!("jolta: Temurin {major} installed by the other process");
-                return Ok(());
-            }
-            if lock.is_dir() {
-                die(&format!("timed out waiting for concurrent install (remove {} if stale)", lock.display()));
-            }
-            match fs::create_dir(&lock) {
-                Ok(()) => Some(LockGuard(lock.clone())),
-                Err(_) => die(&format!("could not acquire install lock {}", lock.display())),
-            }
+    match vendor {
+        "temurin" => {
+            let os = if os == "macos" { "mac" } else { os };
+            format!("https://api.adoptium.net/v3/binary/latest/{major}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse")
         }
-    };
+        "corretto" => format!("https://corretto.aws/downloads/latest/amazon-corretto-{major}-{arch}-{os}-jdk.tar.gz"),
+        "oracle" => format!("https://download.oracle.com/java/{major}/latest/jdk-{major}_{os}-{arch}_bin.tar.gz"),
+        "graalvm" => format!("https://download.oracle.com/graalvm/{major}/latest/graalvm-jdk-{major}_{os}-{arch}_bin.tar.gz"),
+        other => die(&format!(
+            "don't know how to download '{other}' builds (downloadable distros: {})",
+            INSTALLABLE_VENDORS.join(", ")
+        )),
+    }
+}
 
+fn install_vendor_major(vendor: &str, major: u32) -> Result<(), ()> {
+    if env::consts::OS != "macos" && env::consts::OS != "linux" {
+        die(&format!("unsupported OS: {}", env::consts::OS));
+    }
+
+    // Serialize concurrent installs of the same distro+major (parallel builds
+    // can fire several shims at once); losers wait, then re-check.
+    let _ = fs::create_dir_all(jolta_home().join("cache"));
+    let lock = jolta_home().join("cache").join(format!("install-{vendor}-{major}.lock"));
     struct LockGuard(PathBuf);
     impl Drop for LockGuard {
         fn drop(&mut self) {
@@ -667,28 +968,46 @@ fn install_major(major: u32) -> Result<(), ()> {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    let _lock_guard = match fs::create_dir(&lock) {
+        Ok(()) => LockGuard(lock.clone()),
+        Err(_) => {
+            println!("jolta: another install of {vendor} {major} is running; waiting...");
+            let mut waited = 0;
+            while lock.is_dir() && waited < 600 {
+                std::thread::sleep(Duration::from_secs(2));
+                waited += 2;
+            }
+            if resolve(&format!("{vendor}-{major}")).is_some() {
+                println!("{} {vendor} {major} installed by the other process", ok_mark());
+                return Ok(());
+            }
+            if lock.is_dir() {
+                die(&format!("timed out waiting for concurrent install (remove {} if stale)", lock.display()));
+            }
+            match fs::create_dir(&lock) {
+                Ok(()) => LockGuard(lock.clone()),
+                Err(_) => die(&format!("could not acquire install lock {}", lock.display())),
+            }
+        }
+    };
 
-    let url = format!(
-        "https://api.adoptium.net/v3/binary/latest/{major}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
-    );
+    let url = vendor_url(vendor, major);
     let tmp = env::temp_dir().join(format!("jolta-install-{}", std::process::id()));
     let _ = fs::create_dir_all(&tmp);
     let _tmp_guard = TmpGuard(tmp.clone());
 
-    println!("jolta: downloading Temurin {major} ({os}/{arch}) from Adoptium...");
     let tarball = tmp.join("jdk.tar.gz");
-    let st = Command::new("curl")
-        .args(["-fSL", "--progress-bar", "-o"])
-        .arg(&tarball)
-        .arg(&url)
-        .status();
-    if !st.is_ok_and(|s| s.success()) {
-        eprintln!("jolta: download failed — is Temurin {major} published for {os}/{arch}? ({url})");
-        drop(lock_guard);
+    let label = format!("{vendor}@{major}");
+    if !download(&url, &tarball, &label) {
+        eprintln!(
+            "{} is {vendor} {major} published for {}/{}? ({url})",
+            paint("2", "hint:", true),
+            env::consts::OS,
+            env::consts::ARCH
+        );
         return Err(());
     }
 
-    println!("jolta: extracting...");
     let extract = tmp.join("x");
     let _ = fs::create_dir_all(&extract);
     let st = Command::new("tar")
@@ -698,10 +1017,10 @@ fn install_major(major: u32) -> Result<(), ()> {
         .arg(&extract)
         .status();
     if !st.is_ok_and(|s| s.success()) {
-        eprintln!("jolta: extraction failed");
-        drop(lock_guard);
+        eprintln!("  {} extraction failed", paint("31", "✗", true));
         return Err(());
     }
+    eprintln!("  {} extracted", paint("32", "✓", true));
     let top = fs::read_dir(&extract)
         .ok()
         .and_then(|mut e| e.find_map(|x| x.ok().map(|x| x.path()).filter(|p| p.is_dir())))
@@ -710,17 +1029,32 @@ fn install_major(major: u32) -> Result<(), ()> {
     let home = managed_home(&top);
     let full = jdk_version(&home).unwrap_or_else(|| die("no release file in extracted JDK"));
 
-    let dest = jolta_home().join("jdks").join(format!("temurin-{full}"));
+    let dest = jolta_home().join("jdks").join(format!("{vendor}-{full}"));
     if dest.is_dir() {
-        println!("jolta: Temurin {full} is already installed");
+        println!("  {} {vendor} {full} is already installed", ok_mark());
     } else {
         let _ = fs::create_dir_all(jolta_home().join("jdks"));
         fs::rename(&top, &dest).unwrap_or_else(|e| die(&format!("cannot move JDK into place: {e}")));
-        println!("jolta: installed Temurin {full} -> {}", dest.display());
+        println!(
+            "  {} installed {} {} {}",
+            ok_mark(),
+            cyan(vendor),
+            bold(&full),
+            dim(&format!("-> {}", dest.display()))
+        );
     }
-    drop(lock_guard);
     cmd_reshim();
     Ok(())
+}
+
+fn cmd_install(spec: &str) {
+    let (vendor, version) = parse_spec(spec);
+    let vendor = vendor.unwrap_or("temurin");
+    let major = major_of(&version)
+        .unwrap_or_else(|| die(&format!("cannot parse version '{spec}' (try e.g. 21 or corretto@21)")));
+    if install_vendor_major(vendor, major).is_err() {
+        exit(1);
+    }
 }
 
 fn cmd_uninstall(name: &str) {
@@ -730,7 +1064,7 @@ fn cmd_uninstall(name: &str) {
     }
     fs::remove_dir_all(&dest).unwrap_or_else(|e| die(&format!("cannot remove {}: {e}", dest.display())));
     clear_cache();
-    println!("jolta: removed {}", dest.display());
+    println!("{} removed {}", ok_mark(), dest.display());
 }
 
 fn cmd_implode(args: &[String]) {
@@ -766,17 +1100,17 @@ fn cmd_implode(args: &[String]) {
             }
         }
         if fs::write(&profile, out).is_ok() {
-            println!("jolta: removed jolta lines from {}", profile.display());
+            println!("{} removed jolta lines from {}", ok_mark(), profile.display());
         }
     }
     let _ = fs::remove_dir_all(&home);
-    println!("jolta: removed {} — open a new shell to finish. So long!", home.display());
+    println!("{} removed {} — open a new shell to finish. So long!", ok_mark(), home.display());
 }
 
 fn cmd_doctor() -> i32 {
-    let mut ok = 0;
+    let mut rc = 0;
     let home = jolta_home();
-    println!("jolta doctor");
+    println!("{}", bold("jolta doctor"));
     println!("  jolta home:    {}", home.display());
     println!(
         "  binary:        {}",
@@ -787,30 +1121,32 @@ fn cmd_doctor() -> i32 {
         .map(|e| e.flatten().filter(|x| x.path().symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())).count())
         .unwrap_or(0);
     if shim_count > 0 {
-        println!("  shims:         ok ({shim_count} installed)");
+        println!("  shims:         {} ok ({shim_count} installed)", ok_mark());
     } else {
-        println!("  shims:         MISSING — run \"jolta setup\"");
-        ok = 1;
+        println!("  shims:         {} MISSING — run \"jolta setup\"", bad_mark());
+        rc = 1;
     }
 
     let path = env::var("PATH").unwrap_or_default();
     let shims = shims_dir().display().to_string();
     if path.split(':').any(|d| d == shims) {
-        println!("  PATH:          ok (shims dir is on PATH)");
+        println!("  PATH:          {} ok (shims dir is on PATH)", ok_mark());
     } else {
-        println!("  PATH:          shims dir NOT on PATH — run \"jolta setup\" and open a new shell");
-        ok = 1;
+        println!("  PATH:          {} shims dir NOT on PATH — run \"jolta setup\" and open a new shell", bad_mark());
+        rc = 1;
     }
 
     match which("java") {
-        Some(p) if p.starts_with(&shims_dir()) => println!("  java:          ok (resolves to the jolta shim)"),
+        Some(p) if p.starts_with(&shims_dir()) => {
+            println!("  java:          {} ok (resolves to the jolta shim)", ok_mark())
+        }
         Some(p) => {
-            println!("  java:          BYPASSING jolta ({} comes before the shims on PATH)", p.display());
-            ok = 1;
+            println!("  java:          {} BYPASSING jolta ({} comes before the shims on PATH)", bad_mark(), p.display());
+            rc = 1;
         }
         None => {
-            println!("  java:          not found on PATH");
-            ok = 1;
+            println!("  java:          {} not found on PATH", bad_mark());
+            rc = 1;
         }
     }
 
@@ -823,10 +1159,10 @@ fn cmd_doctor() -> i32 {
     };
     match env::var("JAVA_HOME") {
         Ok(jh) if Some(PathBuf::from(&jh)) == expected => {
-            println!("  JAVA_HOME:     ok ({jh} — matches the pin here, hook is working)");
+            println!("  JAVA_HOME:     {} ok ({jh} — matches the pin here, hook is working)", ok_mark());
         }
         Ok(jh) => {
-            println!("  JAVA_HOME:     STALE: {jh}");
+            println!("  JAVA_HOME:     {} STALE: {jh}", bad_mark());
             println!(
                 "                 expected {} for this directory",
                 expected.map(|p| p.display().to_string()).unwrap_or_else(|| "<unresolvable>".into())
@@ -834,10 +1170,10 @@ fn cmd_doctor() -> i32 {
             println!("                 mvn/gradle use JAVA_HOME directly and will bypass jolta;");
             println!("                 remove any manual \"export JAVA_HOME\" from your shell profile");
             println!("                 and make sure the jolta hook line comes after it (\"jolta setup\" adds it)");
-            ok = 1;
+            rc = 1;
         }
         Err(_) => {
-            println!("  JAVA_HOME:     not set — shims still work, but mvn/gradle prefer JAVA_HOME;");
+            println!("  JAVA_HOME:     {} not set — shims still work, but mvn/gradle prefer JAVA_HOME;", warn_mark());
             println!("                 run \"jolta setup\" to install the cd hook that keeps it in sync");
         }
     }
@@ -845,19 +1181,19 @@ fn cmd_doctor() -> i32 {
     let count = list_all().len();
     println!("  JDKs found:    {count}");
     if count == 0 {
-        println!("                 none! install one with \"jolta install 21\"");
-        ok = 1;
+        println!("                 {} none! install one with \"jolta install 21\"", bad_mark());
+        rc = 1;
     }
 
     let pin = read_pin();
     match pin.spec {
-        Some(s) => println!("  pin here:      '{s}' via {}", pin.source),
+        Some(s) => println!("  pin here:      '{}' via {}", bold(&s), pin.source),
         None => println!("  pin here:      none (system default JDK will be used)"),
     }
-    ok
+    rc
 }
 
-// ---------------------------------------------------------------- main
+// ------------------------------------------------------------------ main
 
 fn main() {
     let mut args: Vec<String> = env::args().collect();
@@ -877,19 +1213,15 @@ fn main() {
         "setup" => cmd_setup(),
         "pin" => match rest.first() {
             Some(s) => cmd_pin(s),
-            None => die("usage: jolta pin <version>"),
+            None => die("usage: jolta pin <spec>  (e.g. 21 or corretto@21)"),
         },
         "default" => match rest.first() {
             Some(s) => cmd_default(s),
-            None => die("usage: jolta default <version>"),
+            None => die("usage: jolta default <spec>"),
         },
-        "install" => match rest.first().and_then(|s| major_of(s)) {
-            Some(m) => {
-                if install_major(m).is_err() {
-                    exit(1);
-                }
-            }
-            None => die("usage: jolta install <major>  (e.g. jolta install 21)"),
+        "install" => match rest.first() {
+            Some(s) => cmd_install(s),
+            None => die("usage: jolta install <spec>  (e.g. 21, corretto@21, graalvm@25)"),
         },
         "uninstall" => match rest.first() {
             Some(s) => cmd_uninstall(s),

@@ -125,7 +125,26 @@ else
   echo "skip bash hook tests (bash not found)"
 fi
 
-# 14. auto-install: pinning an uninstalled major downloads it (network, opt-in)
+# 14. distro-aware resolution (runs only when a corretto JDK is present)
+cor_major=$("$JOLTA_BIN" jdks | awk -F'\t' '$3=="corretto"{print $1; exit}')
+if [ -n "$cor_major" ]; then
+  cor_home=$("$JOLTA_BIN" jdks | awk -F'\t' '$3=="corretto"{print $4; exit}')
+  mkdir -p "$work/p6" && cd "$work/p6"
+  echo "corretto-$cor_major" > .java-version
+  check "corretto pin resolves to corretto" "^$cor_home\$" "$(jolta home)"
+  non_cor=$("$JOLTA_BIN" jdks | awk -F'\t' -v m="$cor_major" '$1==m && $3!="corretto"{print $3; exit}')
+  if [ -z "$non_cor" ]; then
+    # no other distro provides this major, so a temurin pin must fail offline
+    echo "temurin-$cor_major" > .java-version
+    out=$(jolta home 2>&1) && rc=0 || rc=$?
+    [ "$rc" -ne 0 ] && { pass=$((pass+1)); echo "ok   wrong-distro pin fails offline"; } \
+      || { fail=$((fail+1)); echo "FAIL wrong-distro pin fails offline (got: $out)"; }
+  fi
+else
+  echo "skip distro tests (no corretto JDK on this machine)"
+fi
+
+# 15. auto-install: pinning an uninstalled major downloads it (network, opt-in)
 if [ "${JOLTA_TEST_NETWORK:-}" = "1" ]; then
   want=25
   if printf '%s\n' "$majors" | grep -qx "$want"; then
