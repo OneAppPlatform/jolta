@@ -26,7 +26,7 @@ One-liner (no clone left behind — the installer fetches a tarball to a temp di
 installs into `~/.jolta`, and cleans up):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
 ```
 
 > While this repo is private, the raw URL needs auth — either run

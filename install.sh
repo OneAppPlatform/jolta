@@ -2,14 +2,14 @@
 # Jolta installer — fetches the repo tarball, runs 'jolta setup' (which installs
 # a self-contained copy into ~/.jolta), and leaves nothing else behind.
 #
-#   curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/master/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
 #
 # While the repo is private the tarball needs auth, so the script falls back to
 # an authenticated 'gh' CLI if plain curl can't reach it.
 set -eu
 
 REPO=${JOLTA_REPO:-dave-oneapp/jolta}
-REF=${JOLTA_REF:-master}
+REF=${JOLTA_REF:-main}
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/jolta-installer.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
