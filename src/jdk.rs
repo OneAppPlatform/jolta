@@ -189,10 +189,11 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
             }
         }
     }
-    // CI images (and some setups) export JAVA_HOME_<major>_<arch>=<home>
+    // CI images (and some setups) export JAVA_HOME_<major>_<arch>=<home>,
+    // sometimes with a trailing separator — normalize or paths won't compare
     for (key, value) in std::env::vars() {
         if key.starts_with("JAVA_HOME_") {
-            let dir = PathBuf::from(&value);
+            let dir = PathBuf::from(value.trim_end_matches(['/', '\\']));
             if let Some(v) = jdk_version(&dir) {
                 out.push((v, dir));
             }
