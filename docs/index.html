@@ -124,8 +124,9 @@ jolta default 21    # global fallback when a project has no pin</code></pre>
 An exact pin (<code>21.0.2</code>) means exact — never silently substituted, and
 auto-installed precisely. <code>.sdkmanrc</code> files (<code>java=21.0.2-tem</code>)
 are honored with vendor mapping when no <code>.java-version</code> claims the
-directory. <code>jolta available</code> shows what every distro publishes, with
-installed versions marked.</p>
+directory. <code>jolta catalog</code> (alias <code>search</code>) shows what every distro
+publishes — latest per distro, per-major comparisons, and <code>@v</code> prefix
+filters like <code>temurin@21.0</code> — with installed versions marked.</p>
 
 <h2 id="distros">Distros</h2>
 <p>A spec can name a JDK distribution as <code>distro@version</code> or
@@ -170,7 +171,7 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td><code>jolta pin &lt;spec&gt;</code></td><td>Write <code>.java-version</code> in the current directory</td></tr>
 <tr><td><code>jolta default &lt;spec&gt;</code></td><td>Set the global fallback version</td></tr>
 <tr><td><code>jolta install &lt;spec&gt;</code></td><td>Download a JDK (<code>21</code>, <code>corretto@21</code>, <code>graalvm@25</code>)</td></tr>
-<tr><td><code>jolta available [x]</code></td><td>What's installable: latest per distro, per-major, or full listings</td></tr>
+<tr><td><code>jolta catalog [x]</code></td><td>The JDK catalog: latest per distro/major, <code>@v</code> prefix filters (alias <code>search</code>)</td></tr>
 <tr><td><code>jolta update</code></td><td>Check jolta-managed JDKs for newer point releases</td></tr>
 <tr><td><code>jolta upgrade [spec]</code></td><td>Upgrade jolta-managed JDKs, pruning old builds</td></tr>
 <tr><td><code>jolta uninstall &lt;name&gt;</code></td><td>Remove a jolta-managed JDK</td></tr>

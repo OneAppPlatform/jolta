@@ -57,7 +57,11 @@ fn main() {
     }
 
     let cmd = args.get(1).cloned().unwrap_or_else(|| "help".into());
-    let rest: Vec<String> = args.iter().skip(2).cloned().collect();
+    let mut rest: Vec<String> = args.iter().skip(2).cloned().collect();
+    if let Some(i) = rest.iter().position(|a| a == "--fresh") {
+        rest.remove(i);
+        install::set_fresh();
+    }
     match cmd.as_str() {
         "setup" => cmd_setup(),
         "pin" => match rest.first() {
@@ -79,7 +83,7 @@ fn main() {
                 paths::jolta_home().display()
             )),
         },
-        "available" | "ls-remote" => cmd_available(rest.first().map(String::as_str)),
+        "catalog" | "search" | "available" | "ls-remote" => cmd_catalog(rest.first().map(String::as_str)),
         "update" | "outdated" => cmd_update(),
         "upgrade" => cmd_upgrade(rest.first().map(String::as_str)),
         "list" | "ls" => cmd_list(),

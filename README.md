@@ -130,9 +130,11 @@ jolta install graalvm@25     # explicitly fetch a GraalVM JDK
 Homebrew-style, for the JDKs jolta itself downloaded:
 
 ```sh
-jolta available     # what's out there: latest per distro (alias: ls-remote)
-jolta available 21  # each distro's latest 21.x
-jolta available temurin@21   # every published Temurin 21.x, installed ones marked
+jolta catalog       # the JDK catalog: latest per distro (aliases: search, ls-remote)
+                    # results cached 24h — add --fresh to refetch
+jolta catalog 21    # each distro's latest 21.x
+jolta catalog temurin        # Temurin's latest per major (LTS + current)
+jolta catalog temurin@21.0   # @v is a prefix filter: every published 21.0.x
 jolta update        # check for newer point releases (alias: jolta outdated)
 jolta upgrade       # upgrade all jolta-managed JDKs, pruning superseded builds
 jolta upgrade 21    # or just one (also corretto@21 etc.)
@@ -177,7 +179,7 @@ jolta install corretto@21  # or another distro
 | `jolta pin <v>` | Write `.java-version` in the current directory |
 | `jolta default <v>` | Set the global fallback version |
 | `jolta install <spec>` | Download a JDK (`21`, `21.0.2`, `corretto@21`, `zulu@21.0.4`) |
-| `jolta available [x]` | What's installable: latest per distro, per-major, or full per-distro listings |
+| `jolta catalog [x]` | The JDK catalog: latest per distro/major, `@v` prefix filters (aliases: `search`, `available`) |
 | `jolta update` | Check jolta-managed JDKs for newer point releases |
 | `jolta upgrade [spec]` | Upgrade jolta-managed JDKs, pruning old builds |
 | `jolta jdks` | Machine-readable list: `major`/`version`/`distro`/`home` |

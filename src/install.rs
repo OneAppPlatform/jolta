@@ -28,7 +28,59 @@ fn platform() -> (&'static str, &'static str, &'static str) {
     (os, arch, ext)
 }
 
+use std::sync::OnceLock;
+
+static FRESH: OnceLock<bool> = OnceLock::new();
+
+/// --fresh: bypass the remote-metadata cache for this invocation.
+pub fn set_fresh() {
+    let _ = FRESH.set(true);
+}
+
+fn fresh() -> bool {
+    *FRESH.get().unwrap_or(&false) || env::var("JOLTA_FRESH").is_ok()
+}
+
+fn cache_key(s: &str) -> String {
+    // djb2 — plenty for filename dedup of URLs
+    let mut h: u64 = 5381;
+    for b in s.bytes() {
+        h = h.wrapping_mul(33) ^ b as u64;
+    }
+    format!("{h:016x}")
+}
+
+/// Remote metadata cache: 24h TTL (JOLTA_CACHE_TTL_HOURS to tune), separate
+/// from the resolution cache so install/reshim's clear_cache leaves it alone.
+fn remote_cache_get(key: &str) -> Option<String> {
+    if fresh() {
+        return None;
+    }
+    let f = jolta_home().join("remote-cache").join(cache_key(key));
+    let ttl_hours: u64 = env::var("JOLTA_CACHE_TTL_HOURS").ok().and_then(|v| v.parse().ok()).unwrap_or(24);
+    let age = fs::metadata(&f).ok()?.modified().ok()?.elapsed().ok()?;
+    if age > Duration::from_secs(ttl_hours * 3600) {
+        return None;
+    }
+    fs::read_to_string(&f).ok()
+}
+
+fn remote_cache_put(key: &str, value: &str) {
+    let dir = jolta_home().join("remote-cache");
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(cache_key(key)), value);
+}
+
 fn url_ok(url: &str) -> bool {
+    if let Some(hit) = remote_cache_get(&format!("ok:{url}")) {
+        return hit == "1";
+    }
+    let ok = url_ok_uncached(url);
+    remote_cache_put(&format!("ok:{url}"), if ok { "1" } else { "0" });
+    ok
+}
+
+fn url_ok_uncached(url: &str) -> bool {
     Command::new("curl")
         .args(["-sIL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "15"])
         .arg(url)
@@ -39,11 +91,17 @@ fn url_ok(url: &str) -> bool {
 }
 
 fn curl_text(url: &str) -> Option<String> {
-    let o = Command::new("curl").args(["-fsSL"]).arg(url).output().ok()?;
-    if !o.status.success() {
-        return None;
+    if let Some(hit) = remote_cache_get(&format!("body:{url}")) {
+        return if hit.is_empty() { None } else { Some(hit) };
     }
-    Some(String::from_utf8_lossy(&o.stdout).into_owned())
+    let o = Command::new("curl").args(["-fsSL"]).arg(url).output().ok()?;
+    let body = if o.status.success() {
+        Some(String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    remote_cache_put(&format!("body:{url}"), body.as_deref().unwrap_or(""));
+    body
 }
 
 /// Every string value for `key` in a JSON blob. Primitive scraping, no parser
@@ -187,6 +245,16 @@ pub fn latest_remote_version(vendor: &str, major: u32) -> Option<String> {
     if env::var("JOLTA_DOWNLOAD_BASE").is_ok() {
         return None; // mirrors serve a stable path; nothing to learn from it
     }
+    let ck = format!("latest:{vendor}:{major}");
+    if let Some(hit) = remote_cache_get(&ck) {
+        return if hit.is_empty() { None } else { Some(hit) };
+    }
+    let result = latest_remote_version_uncached(vendor, major);
+    remote_cache_put(&ck, result.as_deref().unwrap_or(""));
+    result
+}
+
+fn latest_remote_version_uncached(vendor: &str, major: u32) -> Option<String> {
     if vendor == "zulu" {
         // no redirect chain to inspect; the API filename carries the version
         let url = zulu_url(&major.to_string(), true)?;

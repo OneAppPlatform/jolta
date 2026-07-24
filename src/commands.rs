@@ -33,7 +33,10 @@ pub fn usage() {
   upgrade [spec]         Upgrade jolta-managed JDKs (all, or one: 21, corretto@21)
   uninstall <name>       Remove a jolta-managed JDK (see 'jolta list' for names)
   list, ls               List installed JDKs and where they come from
-  available [x]          What's installable: latest per distro, per-major, or per-distro
+  catalog [x]            The JDK catalog: latest per distro, per-major, or per-distro
+                         (@v filters: temurin@21 all 21.x, temurin@21.0 all 21.0.x)
+                         aliases: search, available, ls-remote
+                         results cached 24h; --fresh refetches
   jdks                   Machine-readable list: major<TAB>version<TAB>distro<TAB>home
   current                Show the Java version resolved for this directory
   which [tool]           Show the full path the shim would exec (default: java)
@@ -378,10 +381,11 @@ fn installed_mark(installed: &[(String, String)], vendor: &str, version: &str) -
     }
 }
 
-/// jolta available                     -> latest per distro
-/// jolta available 21                  -> each distro's latest 21.x
-/// jolta available temurin[@21]        -> all published versions of a distro
-pub fn cmd_available(arg: Option<&str>) {
+/// jolta catalog                  -> latest per distro
+/// jolta catalog 21               -> each distro's latest 21.x
+/// jolta catalog temurin          -> a distro's latest per major (LTS + current)
+/// jolta catalog temurin@21[.0]   -> published versions matching the filter
+pub fn cmd_catalog(arg: Option<&str>) {
     let installed = installed_set();
     let universe = release_universe();
 
@@ -418,32 +422,77 @@ pub fn cmd_available(arg: Option<&str>) {
                 let (v, ver) = parse_spec(a);
                 (v.unwrap(), ver)
             };
-            let majors: Vec<u32> = if !ver.is_empty() {
-                vec![major_of(&ver).unwrap_or_else(|| die(&format!("cannot parse '{ver}'")))]
+            if ver.is_empty() {
+                // distro overview: latest per major, LTS set + current feature
+                let mut majors: Vec<u32> = universe
+                    .as_ref()
+                    .map(|(_, lts, _, feature)| {
+                        let mut m = lts.clone();
+                        m.push(*feature);
+                        m
+                    })
+                    .unwrap_or_default();
+                majors.sort_by_key(|x| std::cmp::Reverse(*x));
+                majors.dedup();
+                println!(
+                    "{} {}",
+                    bold(&cyan(vendor)),
+                    dim("— latest per major (LTS + current; use @<major> for every build)")
+                );
+                let mut any = false;
+                for major in majors {
+                    match latest_remote_version(vendor, major) {
+                        Some(v) => {
+                            any = true;
+                            let extra = if installed.iter().any(|(ven, iv)| ven == vendor && iv == &v) {
+                                format!(" {}", green("✓ installed"))
+                            } else {
+                                let others: Vec<&str> = installed
+                                    .iter()
+                                    .filter(|(ven, iv)| ven == vendor && major_of(iv) == Some(major))
+                                    .map(|(_, iv)| iv.as_str())
+                                    .collect();
+                                if others.is_empty() {
+                                    String::new()
+                                } else {
+                                    dim(&format!(" (installed: {})", others.join(", ")))
+                                }
+                            };
+                            println!("  {:<4} {}{extra}", bold(&major.to_string()), v);
+                        }
+                        None if probe_latest(vendor, major) => {
+                            any = true;
+                            println!("  {:<4} {}", bold(&major.to_string()), dim("published (version shown on install)"));
+                        }
+                        None => {}
+                    }
+                }
+                if !any {
+                    println!("  {}", dim("(nothing reachable — network problem, or distro doesn't publish these majors)"));
+                }
             } else {
-                let mut m = universe.as_ref().map(|(a, _, _, _)| a.clone()).unwrap_or_default();
-                m.sort_by_key(|x| std::cmp::Reverse(*x));
-                m
-            };
-            println!("{} {}", bold(&cyan(vendor)), dim("— published GA versions"));
-            if matches!(vendor, "oracle" | "graalvm") {
-                println!("{}", dim("  (no listing API; showing latest per major — exact installs of any published version work)"));
-            }
-            let mut any = false;
-            for major in majors {
-                let versions = vendor_versions(vendor, major);
+                // @v is a prefix filter: temurin@21 -> all 21.x, @21.0 -> 21.0.x
+                let major = major_of(&ver).unwrap_or_else(|| die(&format!("cannot parse '{ver}'")));
+                println!(
+                    "{} {}",
+                    bold(&cyan(vendor)),
+                    dim(&format!("— published GA versions matching {ver}"))
+                );
+                if matches!(vendor, "oracle" | "graalvm") {
+                    println!("{}", dim("  (no listing API; latest per major only — exact installs of any published version work)"));
+                }
+                let versions: Vec<String> = vendor_versions(vendor, major)
+                    .into_iter()
+                    .filter(|v| v == &ver || v.starts_with(&format!("{ver}.")) || v.starts_with(&format!("{ver}u")))
+                    .collect();
                 if versions.is_empty() {
-                    continue;
+                    println!("  {}", dim("(no published versions match)"));
+                } else {
+                    for (i, v) in versions.iter().enumerate() {
+                        let latest_tag = if i == 0 { dim(" (latest)") } else { String::new() };
+                        println!("  {v}{latest_tag}{}", installed_mark(&installed, vendor, v));
+                    }
                 }
-                any = true;
-                println!("  {}", bold(&major.to_string()));
-                for (i, v) in versions.iter().enumerate() {
-                    let latest_tag = if i == 0 { dim(" (latest)") } else { String::new() };
-                    println!("    {v}{latest_tag}{}", installed_mark(&installed, vendor, v));
-                }
-            }
-            if !any {
-                println!("  {}", dim("(nothing found — network problem, or distro doesn't publish these majors)"));
             }
         }
         // jolta available 21
@@ -568,6 +617,8 @@ pub fn cmd_update() {
 }
 
 pub fn cmd_upgrade(spec: Option<&str>) {
+    crate::install::set_fresh(); // never skip a new point release on stale cache
+
     let managed = managed_targets();
     let targets: Vec<(String, u32, String)> = match spec {
         Some(s) => {
