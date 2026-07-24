@@ -22,7 +22,7 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
 header.hero { background: var(--hero-bg); border-bottom: 1px solid var(--border); padding: 56px 0 40px; text-align: center; }
-.hero img { max-width: 420px; width: 90%; height: auto; background: #fff; padding: 14px 22px; border-radius: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+.hero img { max-width: 420px; width: 90%; height: auto; border-radius: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
 .hero p.tag { font-size: 1.25rem; color: var(--muted); margin: 18px auto 8px; max-width: 560px; }
 nav.toc { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--border); z-index: 5; }
 nav.toc .wrap { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 10px 24px; font-size: .95rem; }
@@ -46,7 +46,10 @@ footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(-
 
 <header class="hero">
   <div class="wrap">
-    <img src="logo.png" alt="Jolta — the hands-off Java version manager">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="logo-dark.png">
+      <img src="logo.png" alt="Jolta — the hands-off Java version manager">
+    </picture>
     <p class="tag">Like <a href="https://volta.sh">Volta</a>, but for Java. Pin a JDK per project and never switch manually again.</p>
     <p>
       <span class="pill">macOS</span><span class="pill">Linux</span><span class="pill">Windows</span>
