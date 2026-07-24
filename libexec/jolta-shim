@@ -1,0 +1,31 @@
+#!/bin/sh
+# jolta shim — every tool in ~/.jolta/shims is a symlink to this script.
+# Resolves the pinned JDK for the current directory and execs the real tool.
+set -eu
+
+tool=$(basename "$0")
+
+self=$0
+n=0
+while [ -L "$self" ] && [ $n -lt 32 ]; do
+  t=$(readlink "$self")
+  case $t in
+    /*) self=$t ;;
+    *)  self=$(dirname "$self")/$t ;;
+  esac
+  n=$((n + 1))
+done
+libexec=$(cd "$(dirname "$self")" && pwd -P)
+. "$libexec/jolta-core.sh"
+
+JOLTA_CLI="$libexec/../bin/jolta"
+JOLTA_AUTO_INSTALL=1
+jolta_resolve_current
+
+[ -x "$JOLTA_RESOLVED_HOME/bin/$tool" ] || jolta_die \
+"'$tool' is not provided by the resolved JDK ($JOLTA_RESOLVED_HOME)
+  version was selected by: $JOLTA_SPEC_SOURCE"
+
+JAVA_HOME=$JOLTA_RESOLVED_HOME
+export JAVA_HOME
+exec "$JOLTA_RESOLVED_HOME/bin/$tool" "$@"
