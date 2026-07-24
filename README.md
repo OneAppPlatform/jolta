@@ -22,6 +22,17 @@ directory to find the nearest `.java-version`, resolves an installed JDK for it,
 
 Requirements: macOS or Linux, zsh or bash, and `curl` (only for JDK auto-install).
 
+One-liner (no clone left behind — the installer fetches a tarball to a temp dir,
+installs into `~/.jolta`, and cleans up):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/master/install.sh | sh
+```
+
+> While this repo is private, the raw URL needs auth — either run
+> `gh api repos/dave-oneapp/jolta/contents/install.sh -H "Accept: application/vnd.github.raw" | sh`
+> (the installer itself falls back to `gh` for the tarball too), or use the clone route:
+
 ```sh
 git clone https://github.com/dave-oneapp/jolta.git && cd jolta
 ./bin/jolta setup
