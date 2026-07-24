@@ -18,10 +18,10 @@ No shell hooks, no `cd` interception. Jolta puts lightweight **shims** on your `
 directory to find the nearest `.java-version`, resolves an installed JDK for it, sets
 `JAVA_HOME`, and execs the real binary. Overhead is a few milliseconds.
 
-> **This is the Rust implementation** (single static binary, shims are symlinks to
-> the binary itself — argv[0] dispatch, ~2ms resolution). The reference POSIX sh
-> implementation lives on the `main` branch; `test/smoke.sh` is the shared
-> conformance suite and both implementations pass it.
+> Implemented as a single static Rust binary — shims are symlinks to the binary
+> itself (argv[0] dispatch, ~2ms resolution). The original POSIX sh reference
+> implementation lives in this repo's history; `test/smoke.sh` is the
+> implementation-agnostic conformance suite (`JOLTA_BIN` selects the binary).
 
 ## Install
 
@@ -32,15 +32,15 @@ One-liner (no clone left behind — fetches a tarball to a temp dir, builds,
 installs into `~/.jolta`, and cleans up):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/rust/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
 ```
 
 > While this repo is private, the raw URL needs auth — either run
-> `gh api repos/dave-oneapp/jolta/contents/install.sh?ref=rust -H "Accept: application/vnd.github.raw" | sh`
+> `gh api repos/dave-oneapp/jolta/contents/install.sh -H "Accept: application/vnd.github.raw" | sh`
 > (the installer itself falls back to `gh` for the tarball too), or use the clone route:
 
 ```sh
-git clone -b rust https://github.com/dave-oneapp/jolta.git && cd jolta
+git clone https://github.com/dave-oneapp/jolta.git && cd jolta
 cargo build --release && ./target/release/jolta setup
 ```
 

@@ -1,8 +1,8 @@
 #!/bin/sh
-# Jolta installer (rust branch) — fetches the source tarball, builds with cargo,
+# Jolta installer — fetches the source tarball, builds with cargo,
 # runs 'jolta setup' (self-contained install into ~/.jolta), and cleans up.
 #
-#   curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/rust/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
 #
 # Requires a Rust toolchain (https://rustup.rs or `brew install rust`) until
 # prebuilt release binaries are published. While the repo is private the
@@ -10,7 +10,7 @@
 set -eu
 
 REPO=${JOLTA_REPO:-dave-oneapp/jolta}
-REF=${JOLTA_REF:-rust}
+REF=${JOLTA_REF:-main}
 
 command -v cargo >/dev/null 2>&1 || {
   echo "jolta installer: cargo not found — install Rust first (https://rustup.rs or 'brew install rust')" >&2
