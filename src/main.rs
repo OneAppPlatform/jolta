@@ -58,6 +58,9 @@ fn main() {
 
     let cmd = args.get(1).cloned().unwrap_or_else(|| "help".into());
     let mut rest: Vec<String> = args.iter().skip(2).cloned().collect();
+    if env::var("JOLTA_FRESH").is_ok() {
+        install::set_fresh();
+    }
     if let Some(i) = rest.iter().position(|a| a == "--fresh") {
         rest.remove(i);
         install::set_fresh();

@@ -28,17 +28,10 @@ fn platform() -> (&'static str, &'static str, &'static str) {
     (os, arch, ext)
 }
 
-use std::sync::OnceLock;
-
-static FRESH: OnceLock<bool> = OnceLock::new();
-
-/// --fresh: bypass the remote-metadata cache for this invocation.
+/// --fresh (or JOLTA_FRESH=1): drop the remote-metadata cache so this
+/// invocation refetches once — and then caches the fresh results.
 pub fn set_fresh() {
-    let _ = FRESH.set(true);
-}
-
-fn fresh() -> bool {
-    *FRESH.get().unwrap_or(&false) || env::var("JOLTA_FRESH").is_ok()
+    let _ = fs::remove_dir_all(jolta_home().join("remote-cache"));
 }
 
 fn cache_key(s: &str) -> String {
@@ -53,9 +46,6 @@ fn cache_key(s: &str) -> String {
 /// Remote metadata cache: 24h TTL (JOLTA_CACHE_TTL_HOURS to tune), separate
 /// from the resolution cache so install/reshim's clear_cache leaves it alone.
 fn remote_cache_get(key: &str) -> Option<String> {
-    if fresh() {
-        return None;
-    }
     let f = jolta_home().join("remote-cache").join(cache_key(key));
     let ttl_hours: u64 = env::var("JOLTA_CACHE_TTL_HOURS").ok().and_then(|v| v.parse().ok()).unwrap_or(24);
     let age = fs::metadata(&f).ok()?.modified().ok()?.elapsed().ok()?;
@@ -404,13 +394,7 @@ pub fn probe_latest(vendor: &str, major: u32) -> bool {
         "zulu" => return false, // has a metadata API; never needs probing
         _ => vendor_url(vendor, major),
     };
-    Command::new("curl")
-        .args(["-sIL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "15"])
-        .arg(&url)
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "200")
-        .unwrap_or(false)
+    url_ok(&url)
 }
 
 /// Remove jolta-managed installs of this distro+major other than `keep`.

@@ -3,9 +3,12 @@
 //! and respects NO_COLOR / TERM=dumb.
 
 use std::env;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::process::exit;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 pub fn tty(err: bool) -> bool {
     static OUT: OnceLock<bool> = OnceLock::new();
@@ -50,5 +53,48 @@ pub fn fmt_bytes(b: u64) -> String {
         format!("{:.1} MB", b as f64 / 1e6)
     } else {
         format!("{} kB", b / 1000)
+    }
+}
+
+/// Spinner on stderr for phases with no per-item progress. Starts drawing only
+/// after 200ms, so cache-warm paths never flash it; inert when not a TTY.
+pub struct Spinner {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+pub fn spinner(label: &str) -> Spinner {
+    let stop = Arc::new(AtomicBool::new(false));
+    if !tty(true) {
+        return Spinner { stop, handle: None };
+    }
+    let flag = stop.clone();
+    let label = label.to_string();
+    let handle = std::thread::spawn(move || {
+        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        std::thread::sleep(Duration::from_millis(200));
+        let mut i = 0;
+        let mut drew = false;
+        while !flag.load(Ordering::Relaxed) {
+            eprint!("\r\x1b[2K\x1b[36m{}\x1b[0m {label}…", FRAMES[i % FRAMES.len()]);
+            let _ = io::stderr().flush();
+            drew = true;
+            i += 1;
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if drew {
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
+        }
+    });
+    Spinner { stop, handle: Some(handle) }
+}
+
+impl Spinner {
+    pub fn finish(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
     }
 }

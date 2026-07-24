@@ -387,7 +387,49 @@ fn installed_mark(installed: &[(String, String)], vendor: &str, version: &str) -
 /// jolta catalog temurin@21[.0]   -> published versions matching the filter
 pub fn cmd_catalog(arg: Option<&str>) {
     let installed = installed_set();
+
+    // Prefetch the whole dataset behind one spinner instead of stalling
+    // row-by-row; the render below then reads warm cache exclusively.
+    let sp = crate::ui::spinner("updating catalog");
     let universe = release_universe();
+    if let Some((_, lts, _, feature)) = &universe {
+        let mut majors: Vec<u32> = lts.clone();
+        majors.push(*feature);
+        majors.sort_by_key(|x| std::cmp::Reverse(*x));
+        majors.dedup();
+        let wanted: Vec<u32> = match arg {
+            Some(a) if !KNOWN_VENDORS.contains(&parse_spec(a).0.unwrap_or("")) && !INSTALLABLE_VENDORS.contains(&a) => {
+                major_of(a).map(|m| vec![m]).unwrap_or(majors)
+            }
+            _ => majors,
+        };
+        // fan out: every (distro, major) lookup runs its curl concurrently,
+        // so a cold prefetch costs one round-trip, not thirty
+        std::thread::scope(|scope| {
+            for vendor in INSTALLABLE_VENDORS {
+                for m in &wanted {
+                    let m = *m;
+                    scope.spawn(move || {
+                        if latest_remote_version(vendor, m).is_none() && matches!(vendor, "oracle" | "graalvm") {
+                            let _ = probe_latest(vendor, m);
+                        }
+                    });
+                }
+            }
+            // filter mode additionally needs the full listing for that distro+major
+            if let Some(a) = arg {
+                let (v, ver) = parse_spec(a);
+                if let (Some(v), false) = (v, ver.is_empty()) {
+                    if let Some(m) = major_of(&ver) {
+                        scope.spawn(move || {
+                            let _ = vendor_versions(v, m);
+                        });
+                    }
+                }
+            }
+        });
+    }
+    sp.finish();
 
     // header line: the Java release universe with LTS + newest highlighted
     if let Some((available, lts, recent_lts, recent_feature)) = &universe {
