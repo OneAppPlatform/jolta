@@ -18,24 +18,30 @@ No shell hooks, no `cd` interception. Jolta puts lightweight **shims** on your `
 directory to find the nearest `.java-version`, resolves an installed JDK for it, sets
 `JAVA_HOME`, and execs the real binary. Overhead is a few milliseconds.
 
+> **This is the Rust implementation** (single static binary, shims are symlinks to
+> the binary itself — argv[0] dispatch, ~2ms resolution). The reference POSIX sh
+> implementation lives on the `master` branch; `test/smoke.sh` is the shared
+> conformance suite and both implementations pass it.
+
 ## Install
 
-Requirements: macOS or Linux, zsh or bash, and `curl` (only for JDK auto-install).
+Requirements: macOS or Linux, zsh or bash, `curl` (for JDK auto-install), and a
+Rust toolchain to build (until prebuilt binaries are published).
 
-One-liner (no clone left behind — the installer fetches a tarball to a temp dir,
+One-liner (no clone left behind — fetches a tarball to a temp dir, builds,
 installs into `~/.jolta`, and cleans up):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/rust/install.sh | sh
 ```
 
 > While this repo is private, the raw URL needs auth — either run
-> `gh api repos/dave-oneapp/jolta/contents/install.sh -H "Accept: application/vnd.github.raw" | sh`
+> `gh api repos/dave-oneapp/jolta/contents/install.sh?ref=rust -H "Accept: application/vnd.github.raw" | sh`
 > (the installer itself falls back to `gh` for the tarball too), or use the clone route:
 
 ```sh
-git clone https://github.com/dave-oneapp/jolta.git && cd jolta
-./bin/jolta setup
+git clone -b rust https://github.com/dave-oneapp/jolta.git && cd jolta
+cargo build --release && ./target/release/jolta setup
 ```
 
 `setup` installs a self-contained copy of jolta into `~/.jolta` (you can delete the
@@ -126,7 +132,8 @@ CI (where the hook isn't loaded), use `jolta exec mvn ...` or `eval "$(jolta env
 
 ## Notes & limits
 
-- Written in dependency-free POSIX sh — nothing to compile, works on macOS and Linux.
+- Written in dependency-free Rust (std only; downloads shell out to `curl`/`tar`).
+  One binary is both the CLI and every shim.
 - `jolta install` fetches the latest GA Temurin for a **major** version (aarch64/x64).
 - Shims are regenerated from the union of all installed JDKs' `bin/` dirs; run
   `jolta reshim` after installing a JDK by other means (e.g. `brew install openjdk@25`).
@@ -136,8 +143,10 @@ CI (where the hook isn't loaded), use `jolta exec mvn ...` or `eval "$(jolta env
 ## Test
 
 ```sh
-./test/smoke.sh
+cargo build --release && ./test/smoke.sh
 ```
 
-Runs against an isolated `JOLTA_HOME` in a temp dir; never touches `~/.jolta` or your
-shell profile.
+Runs the conformance suite against an isolated `JOLTA_HOME` in a temp dir; never
+touches `~/.jolta` or your shell profile. `JOLTA_TEST_NETWORK=1` additionally
+exercises real auto-install from Adoptium; `JOLTA_BIN=<path>` points the suite at a
+different binary (it drives the sh implementation on `master` too).
