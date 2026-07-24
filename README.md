@@ -20,7 +20,7 @@ directory to find the nearest `.java-version`, resolves an installed JDK for it,
 
 > **This is the Rust implementation** (single static binary, shims are symlinks to
 > the binary itself — argv[0] dispatch, ~2ms resolution). The reference POSIX sh
-> implementation lives on the `master` branch; `test/smoke.sh` is the shared
+> implementation lives on the `main` branch; `test/smoke.sh` is the shared
 > conformance suite and both implementations pass it.
 
 ## Install
@@ -149,4 +149,4 @@ cargo build --release && ./test/smoke.sh
 Runs the conformance suite against an isolated `JOLTA_HOME` in a temp dir; never
 touches `~/.jolta` or your shell profile. `JOLTA_TEST_NETWORK=1` additionally
 exercises real auto-install from Adoptium; `JOLTA_BIN=<path>` points the suite at a
-different binary (it drives the sh implementation on `master` too).
+different binary (it drives the sh implementation on `main` too).

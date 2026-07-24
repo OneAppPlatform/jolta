@@ -4,7 +4,7 @@
 //! through a symlink named after a JDK tool (`java`, `javac`, ...) it acts as
 //! that tool's shim — resolve the pinned JDK, set JAVA_HOME, exec the real
 //! binary. Behavior is kept in lockstep with the reference sh implementation
-//! on master; test/smoke.sh is the conformance suite.
+//! on main; test/smoke.sh is the conformance suite.
 
 use std::env;
 use std::fs;
