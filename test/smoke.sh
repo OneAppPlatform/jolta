@@ -144,7 +144,21 @@ else
   echo "skip distro tests (no corretto JDK on this machine)"
 fi
 
-# 15. auto-install: pinning an uninstalled major downloads it (network, opt-in)
+# 15. implode removes only JOLTA_HOME + profile lines; outside JDKs untouched
+imp=$(mktemp -d)
+mkdir -p "$imp/home/jdks/temurin-99.0.0" "$imp/outside-jdk/bin"
+echo 'JAVA_VERSION="99.0.0"' > "$imp/home/jdks/temurin-99.0.0/release"
+touch "$imp/outside-jdk/bin/java" && chmod +x "$imp/outside-jdk/bin/java"
+printf '# keep me\n# >>> jolta >>>\nexport PATH=x\n# <<< jolta <<<\n' > "$imp/.zshrc"
+HOME="$imp" JOLTA_HOME="$imp/home" SHELL=/bin/zsh "$JOLTA_BIN" implode --yes >/dev/null
+[ ! -d "$imp/home" ] && { pass=$((pass+1)); echo "ok   implode removed JOLTA_HOME"; } \
+  || { fail=$((fail+1)); echo "FAIL implode removed JOLTA_HOME"; }
+[ -x "$imp/outside-jdk/bin/java" ] && { pass=$((pass+1)); echo "ok   implode left outside JDK alone"; } \
+  || { fail=$((fail+1)); echo "FAIL implode left outside JDK alone"; }
+check "implode kept non-jolta zshrc lines" "keep me" "$(cat "$imp/.zshrc")"
+rm -rf "$imp"
+
+# 16. auto-install: pinning an uninstalled major downloads it (network, opt-in)
 if [ "${JOLTA_TEST_NETWORK:-}" = "1" ]; then
   want=25
   if printf '%s\n' "$majors" | grep -qx "$want"; then

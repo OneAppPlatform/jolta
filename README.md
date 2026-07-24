@@ -56,9 +56,11 @@ Re-running setup from a newer build upgrades the installed copy.
 jolta implode
 ```
 
-Removes `~/.jolta` (including any downloaded JDKs) and the jolta lines from your
-shell profile, after a confirmation prompt. Your `.java-version` files and any
-Homebrew/system JDKs are untouched.
+Removes `~/.jolta` and the jolta lines from your shell profile, after a
+confirmation prompt that lists exactly which jolta-installed JDKs will be
+deleted. JDKs installed outside jolta (Homebrew, `/Library/Java`, SDKMAN, ...)
+and your `.java-version` files are never touched — jolta only ever deletes
+what it downloaded itself.
 
 ## Pinning
 

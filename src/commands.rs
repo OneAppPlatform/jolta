@@ -357,10 +357,20 @@ pub fn cmd_implode(args: &[String]) {
     let profile = profile_file();
     if args.first().map(String::as_str) != Some("--yes") {
         println!(
-            "This removes {} (including downloaded JDKs) and the jolta lines from {}.",
+            "This removes {} and the jolta lines from {}.",
             home.display(),
             profile.display()
         );
+        let managed = list_managed();
+        if managed.is_empty() {
+            println!("No jolta-installed JDKs to delete.");
+        } else {
+            println!("The following jolta-installed JDKs will be deleted:");
+            for (v, h) in &managed {
+                println!("  - {} ({})", v, h.display());
+            }
+        }
+        println!("JDKs installed outside jolta (Homebrew, /Library/Java, SDKMAN, ...) are not touched.");
         print!("Type \"yes\" to continue: ");
         let _ = io::stdout().flush();
         let mut answer = String::new();
