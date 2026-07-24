@@ -1,5 +1,7 @@
 # Jolta
 
+[![CI](https://github.com/dave-oneapp/jolta/actions/workflows/ci.yml/badge.svg)](https://github.com/dave-oneapp/jolta/actions/workflows/ci.yml)
+
 **Like [Volta](https://volta.sh), but for Java.** Pin a JDK version per project and never
 manually switch again — `java`, `javac`, `mvn`-launched builds, everything just uses the
 right JDK for whatever directory you're in.
@@ -25,8 +27,8 @@ directory to find the nearest `.java-version`, resolves an installed JDK for it,
 
 ## Install
 
-Requirements: macOS or Linux, zsh or bash, `curl` (for JDK auto-install), and a
-Rust toolchain to build (until prebuilt binaries are published).
+Requirements: macOS, Linux, or Windows; `curl` (for JDK auto-install — built into
+Windows 10+); and a Rust toolchain to build (until prebuilt binaries are published).
 
 One-liner (no clone left behind — fetches a tarball to a temp dir, builds,
 installs into `~/.jolta`, and cleans up):
@@ -49,6 +51,13 @@ clone afterward), generates shims for every JDK it can find, and appends two sma
 marked blocks to your shell profile: one putting `~/.jolta/shims` on your `PATH`, one
 enabling the `JAVA_HOME` cd hook. Open a new shell and run `jolta doctor` to verify.
 Re-running setup from a newer build upgrades the installed copy.
+
+**Windows:** build with `cargo build --release`, run `.\target\release\jolta.exe setup`,
+then follow the two printed steps: add the shims and bin directories to your user
+`PATH`, and add `jolta hook powershell | Out-String | Invoke-Expression` to your
+PowerShell `$PROFILE` for the `JAVA_HOME` hook. Shims are hard links (no Developer
+Mode needed), downloads come as zip, and discovery scans `Program Files` vendor
+directories plus `JAVA_HOME_<major>_*` environment variables.
 
 ## Uninstall
 
@@ -156,7 +165,8 @@ CI (where the hook isn't loaded), use `jolta exec mvn ...` or `eval "$(jolta env
 ## Notes & limits
 
 - Written in dependency-free Rust (std only; downloads shell out to `curl`/`tar`).
-  One binary is both the CLI and every shim.
+  One binary is both the CLI and every shim. Runs on macOS, Linux, and Windows;
+  CI exercises the conformance suite on all three.
 - Terminal UI: colored, glyphed output and an animated download progress bar
   (spinner, bar, size, throughput). Degrades to plain text when output is piped;
   respects `NO_COLOR` and `TERM=dumb`.
