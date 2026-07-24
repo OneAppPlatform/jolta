@@ -21,7 +21,7 @@ directory to find the nearest `.java-version`, resolves an installed JDK for it,
 ## Install
 
 ```sh
-git clone <this repo> && cd jolta
+git clone https://github.com/dave-oneapp/jolta.git && cd jolta
 ./bin/jolta setup
 ```
 
