@@ -35,8 +35,15 @@ directory to find the nearest `.java-version`, resolves an installed JDK for it,
 Requirements: macOS, Linux, or Windows; `curl` (for JDK auto-install — built into
 Windows 10+); plus a Rust toolchain only if no prebuilt binary exists for your platform (the installer prefers release binaries).
 
-One-liner (no clone left behind — fetches a tarball to a temp dir, builds,
-installs into `~/.jolta`, and cleans up):
+Homebrew (macOS/Linux):
+
+```sh
+brew install OneAppPlatform/tap/jolta
+jolta setup
+```
+
+Or the curl one-liner (no clone left behind — fetches a prebuilt binary to a temp
+dir, installs into `~/.jolta`, and cleans up):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh

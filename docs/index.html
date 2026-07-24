@@ -80,8 +80,11 @@ $ cd ../legacy-app      <b># has .java-version with "8"</b>
 $ java -version         <b># → 1.8 — no sdk use, no jenv shell, no export JAVA_HOME</b></code></pre>
 
 <h2 id="install">Install</h2>
-<p>macOS &amp; Linux — one line, no clone left behind. The installer downloads a
-prebuilt binary for your platform (building from source only if none exists):</p>
+<p>Homebrew (macOS &amp; Linux):</p>
+<pre><code>brew install OneAppPlatform/tap/jolta
+jolta setup</code></pre>
+<p>Or one line with no clone left behind — the installer downloads a prebuilt
+binary for your platform (building from source only if none exists):</p>
 <pre><code>curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh</code></pre>
 <p><strong>Windows</strong> — download <code>jolta-x86_64-pc-windows-msvc.zip</code> from the
 <a href="https://github.com/OneAppPlatform/jolta/releases">releases page</a>, unzip, run
