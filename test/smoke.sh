@@ -4,6 +4,10 @@
 set -eu
 
 repo=$(cd "$(dirname "$0")/.." && pwd -P)
+# The binary under test: pass JOLTA_BIN to override (defaults to the release build)
+JOLTA_BIN=${JOLTA_BIN:-$repo/target/release/jolta}
+[ -x "$JOLTA_BIN" ] || { echo "build first: cargo build --release (missing $JOLTA_BIN)" >&2; exit 1; }
+bindir=$(cd "$(dirname "$JOLTA_BIN")" && pwd -P)
 work=$(mktemp -d "${TMPDIR:-/tmp}/jolta-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
 
@@ -24,12 +28,11 @@ check() {  # check <description> <expected-substring> <actual>
 
 # Set up shims in the isolated home (skip profile edits by writing shims directly)
 mkdir -p "$JOLTA_HOME/shims" "$JOLTA_HOME/jdks"
-"$repo/bin/jolta" reshim >/dev/null
-export PATH="$JOLTA_HOME/shims:$repo/bin:$PATH"
+"$JOLTA_BIN" reshim >/dev/null
+export PATH="$JOLTA_HOME/shims:$bindir:$PATH"
 
 # Pick two distinct majors that exist on this machine
-majors=$(. "$repo/libexec/jolta-core.sh"; { jolta_list_managed; jolta_list_system; } \
-  | cut -f1 | while read -r v; do jolta_major_of "$v"; done | sort -un)
+majors=$("$JOLTA_BIN" jdks | cut -f1 | sort -un)
 m1=$(printf '%s\n' "$majors" | head -n1)
 m2=$(printf '%s\n' "$majors" | tail -n1)
 if [ -z "$m1" ] || [ "$m1" = "$m2" ]; then
@@ -93,7 +96,7 @@ check "jolta home matches which" "^$(jolta which java | sed 's|/bin/java$||')\$"
 # 12. zsh hook keeps JAVA_HOME in sync across cd (skip if zsh unavailable)
 if command -v zsh >/dev/null 2>&1; then
   hook_out=$(zsh -f -c '
-    export PATH='"$JOLTA_HOME/shims:$repo/bin"':$PATH
+    export PATH='"$JOLTA_HOME/shims:$bindir"':$PATH
     export JOLTA_HOME='"$JOLTA_HOME"'
     eval "$(jolta hook zsh)"
     cd '"$work/p1"'   && echo "p1:$JAVA_HOME"
@@ -110,7 +113,7 @@ fi
 # 13. bash hook does the same via PROMPT_COMMAND
 if command -v bash >/dev/null 2>&1; then
   hook_out=$(bash --noprofile --norc -c '
-    export PATH='"$JOLTA_HOME/shims:$repo/bin"':$PATH
+    export PATH='"$JOLTA_HOME/shims:$bindir"':$PATH
     export JOLTA_HOME='"$JOLTA_HOME"'
     eval "$(jolta hook bash)"
     cd '"$work/p1"' && eval "$PROMPT_COMMAND" && echo "p1:$JAVA_HOME"
@@ -122,7 +125,26 @@ else
   echo "skip bash hook tests (bash not found)"
 fi
 
-# 14. auto-install: pinning an uninstalled major downloads it (network, opt-in)
+# 14. distro-aware resolution (runs only when a corretto JDK is present)
+cor_major=$("$JOLTA_BIN" jdks | awk -F'\t' '$3=="corretto"{print $1; exit}')
+if [ -n "$cor_major" ]; then
+  cor_home=$("$JOLTA_BIN" jdks | awk -F'\t' '$3=="corretto"{print $4; exit}')
+  mkdir -p "$work/p6" && cd "$work/p6"
+  echo "corretto-$cor_major" > .java-version
+  check "corretto pin resolves to corretto" "^$cor_home\$" "$(jolta home)"
+  non_cor=$("$JOLTA_BIN" jdks | awk -F'\t' -v m="$cor_major" '$1==m && $3!="corretto"{print $3; exit}')
+  if [ -z "$non_cor" ]; then
+    # no other distro provides this major, so a temurin pin must fail offline
+    echo "temurin-$cor_major" > .java-version
+    out=$(jolta home 2>&1) && rc=0 || rc=$?
+    [ "$rc" -ne 0 ] && { pass=$((pass+1)); echo "ok   wrong-distro pin fails offline"; } \
+      || { fail=$((fail+1)); echo "FAIL wrong-distro pin fails offline (got: $out)"; }
+  fi
+else
+  echo "skip distro tests (no corretto JDK on this machine)"
+fi
+
+# 15. auto-install: pinning an uninstalled major downloads it (network, opt-in)
 if [ "${JOLTA_TEST_NETWORK:-}" = "1" ]; then
   want=25
   if printf '%s\n' "$majors" | grep -qx "$want"; then

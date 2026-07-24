@@ -18,11 +18,17 @@ No shell hooks, no `cd` interception. Jolta puts lightweight **shims** on your `
 directory to find the nearest `.java-version`, resolves an installed JDK for it, sets
 `JAVA_HOME`, and execs the real binary. Overhead is a few milliseconds.
 
+> Implemented as a single static Rust binary — shims are symlinks to the binary
+> itself (argv[0] dispatch, ~2ms resolution). The original POSIX sh reference
+> implementation lives in this repo's history; `test/smoke.sh` is the
+> implementation-agnostic conformance suite (`JOLTA_BIN` selects the binary).
+
 ## Install
 
-Requirements: macOS or Linux, zsh or bash, and `curl` (only for JDK auto-install).
+Requirements: macOS or Linux, zsh or bash, `curl` (for JDK auto-install), and a
+Rust toolchain to build (until prebuilt binaries are published).
 
-One-liner (no clone left behind — the installer fetches a tarball to a temp dir,
+One-liner (no clone left behind — fetches a tarball to a temp dir, builds,
 installs into `~/.jolta`, and cleans up):
 
 ```sh
@@ -35,14 +41,14 @@ curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh |
 
 ```sh
 git clone https://github.com/dave-oneapp/jolta.git && cd jolta
-./bin/jolta setup
+cargo build --release && ./target/release/jolta setup
 ```
 
 `setup` installs a self-contained copy of jolta into `~/.jolta` (you can delete the
 clone afterward), generates shims for every JDK it can find, and appends two small
 marked blocks to your shell profile: one putting `~/.jolta/shims` on your `PATH`, one
 enabling the `JAVA_HOME` cd hook. Open a new shell and run `jolta doctor` to verify.
-Re-running `./bin/jolta setup` from a newer checkout upgrades the installed copy.
+Re-running setup from a newer build upgrades the installed copy.
 
 ## Uninstall
 
@@ -71,6 +77,25 @@ Version matching is by major version, preferring an exact full-version match, th
 highest installed build of that major. `8`, `1.8`, `21`, `21.0.4`, and `temurin-21`
 all parse.
 
+## Distros
+
+A pin (or install spec) can name a JDK distribution as `distro@version` or
+`distro-version`:
+
+```sh
+jolta pin corretto@21        # this project wants Amazon Corretto 21
+jolta install graalvm@25     # explicitly fetch a GraalVM JDK
+```
+
+- **Downloadable distros:** `temurin` (default), `corretto`, `graalvm`, `oracle`.
+- **Recognized when matching** (installed JDKs are identified by their release
+  metadata and path): those four plus `zulu` and `openjdk` (Homebrew builds).
+- A distro-qualified pin only matches that distro — `corretto-21` will pick an
+  installed Corretto 21 over a Homebrew OpenJDK 21, and auto-install Corretto if
+  it's missing. A bare `21` matches any distro of major 21.
+
+`jolta list` and `jolta jdks` show the distro of every installed JDK.
+
 ## Where JDKs come from
 
 Jolta finds JDKs you already have (Homebrew, `/Library/Java/JavaVirtualMachines`,
@@ -84,7 +109,8 @@ lock), and can be disabled with `JOLTA_NO_AUTO_INSTALL=1`.
 
 ```sh
 jolta list          # everything jolta can see, with the active one starred
-jolta install 21    # explicitly download Temurin 21 from Adoptium
+jolta install 21           # explicitly download Temurin 21
+jolta install corretto@21  # or another distro
 ```
 
 ## Commands
@@ -94,7 +120,8 @@ jolta install 21    # explicitly download Temurin 21 from Adoptium
 | `jolta setup` | Install shims + shell profile setup |
 | `jolta pin <v>` | Write `.java-version` in the current directory |
 | `jolta default <v>` | Set the global fallback version |
-| `jolta install <major>` | Download a Temurin JDK from Adoptium |
+| `jolta install <spec>` | Download a JDK (`21`, `corretto@21`, `graalvm@25`) |
+| `jolta jdks` | Machine-readable list: `major`/`version`/`distro`/`home` |
 | `jolta uninstall <name>` | Remove a jolta-managed JDK |
 | `jolta list` | List visible JDKs, star the active one |
 | `jolta current` | Show the version resolved here, and why |
@@ -126,8 +153,12 @@ CI (where the hook isn't loaded), use `jolta exec mvn ...` or `eval "$(jolta env
 
 ## Notes & limits
 
-- Written in dependency-free POSIX sh — nothing to compile, works on macOS and Linux.
-- `jolta install` fetches the latest GA Temurin for a **major** version (aarch64/x64).
+- Written in dependency-free Rust (std only; downloads shell out to `curl`/`tar`).
+  One binary is both the CLI and every shim.
+- Terminal UI: colored, glyphed output and an animated download progress bar
+  (spinner, bar, size, throughput). Degrades to plain text when output is piped;
+  respects `NO_COLOR` and `TERM=dumb`.
+- `jolta install` fetches the latest GA build of a distro for a **major** version (aarch64/x64).
 - Shims are regenerated from the union of all installed JDKs' `bin/` dirs; run
   `jolta reshim` after installing a JDK by other means (e.g. `brew install openjdk@25`).
 - Resolution results are cached in `~/.jolta/cache` (invalidated automatically when the
@@ -136,8 +167,10 @@ CI (where the hook isn't loaded), use `jolta exec mvn ...` or `eval "$(jolta env
 ## Test
 
 ```sh
-./test/smoke.sh
+cargo build --release && ./test/smoke.sh
 ```
 
-Runs against an isolated `JOLTA_HOME` in a temp dir; never touches `~/.jolta` or your
-shell profile.
+Runs the conformance suite against an isolated `JOLTA_HOME` in a temp dir; never
+touches `~/.jolta` or your shell profile. `JOLTA_TEST_NETWORK=1` additionally
+exercises real auto-install from Adoptium; `JOLTA_BIN=<path>` points the suite at a
+different binary (it drives the sh implementation on `main` too).

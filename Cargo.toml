@@ -1,0 +1,15 @@
+[package]
+name = "jolta"
+version = "0.2.0"
+edition = "2021"
+description = "Like Volta, but for Java — automatic per-project JDK switching via .java-version"
+license = "MIT"
+
+[dependencies]
+# none — std only; downloads shell out to curl/tar like the reference sh version
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
