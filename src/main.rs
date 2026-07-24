@@ -79,6 +79,7 @@ fn main() {
                 paths::jolta_home().display()
             )),
         },
+        "available" | "ls-remote" => cmd_available(rest.first().map(String::as_str)),
         "update" | "outdated" => cmd_update(),
         "upgrade" => cmd_upgrade(rest.first().map(String::as_str)),
         "list" | "ls" => cmd_list(),

@@ -120,9 +120,12 @@ commit it to your repo:</p>
 jolta default 21    # global fallback when a project has no pin</code></pre>
 <p>Resolution order: <code>JOLTA_JAVA_VERSION</code> env var → nearest
 <code>.java-version</code> walking up → <code>jolta default</code> → system default JDK.</p>
-<p>Matching is by major version, preferring an exact full-version match, then the highest
-installed build of that major. <code>8</code>, <code>1.8</code>, <code>21</code>,
-<code>21.0.4</code>, and <code>temurin-21</code> all parse.</p>
+<p>A major pin (<code>21</code>) matches the highest installed build of that major.
+An exact pin (<code>21.0.2</code>) means exact — never silently substituted, and
+auto-installed precisely. <code>.sdkmanrc</code> files (<code>java=21.0.2-tem</code>)
+are honored with vendor mapping when no <code>.java-version</code> claims the
+directory. <code>jolta available</code> shows what every distro publishes, with
+installed versions marked.</p>
 
 <h2 id="distros">Distros</h2>
 <p>A spec can name a JDK distribution as <code>distro@version</code> or
@@ -131,7 +134,7 @@ installed build of that major. <code>8</code>, <code>1.8</code>, <code>21</code>
 jolta install graalvm@25     # explicitly fetch a GraalVM JDK</code></pre>
 <ul>
   <li><strong>Downloadable:</strong> <code>temurin</code> (default), <code>corretto</code>,
-      <code>graalvm</code>, <code>oracle</code>.</li>
+      <code>graalvm</code>, <code>oracle</code>, <code>zulu</code>.</li>
   <li><strong>Recognized when matching:</strong> those four plus <code>zulu</code> and
       <code>openjdk</code> (Homebrew builds).</li>
   <li>A distro-qualified pin is strict — <code>corretto-21</code> picks an installed
@@ -167,6 +170,7 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td><code>jolta pin &lt;spec&gt;</code></td><td>Write <code>.java-version</code> in the current directory</td></tr>
 <tr><td><code>jolta default &lt;spec&gt;</code></td><td>Set the global fallback version</td></tr>
 <tr><td><code>jolta install &lt;spec&gt;</code></td><td>Download a JDK (<code>21</code>, <code>corretto@21</code>, <code>graalvm@25</code>)</td></tr>
+<tr><td><code>jolta available [x]</code></td><td>What's installable: latest per distro, per-major, or full listings</td></tr>
 <tr><td><code>jolta update</code></td><td>Check jolta-managed JDKs for newer point releases</td></tr>
 <tr><td><code>jolta upgrade [spec]</code></td><td>Upgrade jolta-managed JDKs, pruning old builds</td></tr>
 <tr><td><code>jolta uninstall &lt;name&gt;</code></td><td>Remove a jolta-managed JDK</td></tr>

@@ -6,7 +6,10 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::install::{install_vendor_major, latest_remote_version, prune_superseded};
+use crate::install::{
+    install_vendor_major, install_vendor_spec, latest_remote_version, probe_latest,
+    prune_superseded, release_universe, vendor_versions,
+};
 use crate::jdk::{
     jdk_version, list_all, list_managed, list_system, major_of, numkey, parse_spec,
     system_default, tool_bin, vendor_of, INSTALLABLE_VENDORS, KNOWN_VENDORS,
@@ -30,6 +33,7 @@ pub fn usage() {
   upgrade [spec]         Upgrade jolta-managed JDKs (all, or one: 21, corretto@21)
   uninstall <name>       Remove a jolta-managed JDK (see 'jolta list' for names)
   list, ls               List installed JDKs and where they come from
+  available [x]          What's installable: latest per distro, per-major, or per-distro
   jdks                   Machine-readable list: major<TAB>version<TAB>distro<TAB>home
   current                Show the Java version resolved for this directory
   which [tool]           Show the full path the shim would exec (default: java)
@@ -194,8 +198,7 @@ pub fn cmd_pin(spec: &str) {
                 "{} no installed JDK matches '{spec}' — fetching it now",
                 paint("33", "jolta:", true)
             );
-            let major = major_of(&version).unwrap();
-            if install_vendor_major(vendor, major).is_err() {
+            if install_vendor_spec(vendor, &version).is_err() {
                 eprintln!(
                     "{} install failed; pin written anyway ('jolta install {spec}' to retry)",
                     paint("33", "jolta: warning:", true)
@@ -351,10 +354,151 @@ pub fn cmd_hook(shell: &str) {
 pub fn cmd_install(spec: &str) {
     let (vendor, version) = parse_spec(spec);
     let vendor = vendor.unwrap_or("temurin");
-    let major = major_of(&version)
-        .unwrap_or_else(|| die(&format!("cannot parse version '{spec}' (try e.g. 21 or corretto@21)")));
-    if install_vendor_major(vendor, major).is_err() {
+    major_of(&version)
+        .unwrap_or_else(|| die(&format!("cannot parse version '{spec}' (try e.g. 21, 21.0.2, or corretto@21)")));
+    if install_vendor_spec(vendor, &version).is_err() {
         std::process::exit(1);
+    }
+}
+
+/// Set of (distro, full version) currently installed on this machine, for
+/// marking listings.
+fn installed_set() -> Vec<(String, String)> {
+    list_all()
+        .into_iter()
+        .filter_map(|(v, h)| vendor_of(&h).map(|ven| (ven.to_string(), v)))
+        .collect()
+}
+
+fn installed_mark(installed: &[(String, String)], vendor: &str, version: &str) -> String {
+    if installed.iter().any(|(ven, v)| ven == vendor && v == version) {
+        format!(" {}", green("✓ installed"))
+    } else {
+        String::new()
+    }
+}
+
+/// jolta available                     -> latest per distro
+/// jolta available 21                  -> each distro's latest 21.x
+/// jolta available temurin[@21]        -> all published versions of a distro
+pub fn cmd_available(arg: Option<&str>) {
+    let installed = installed_set();
+    let universe = release_universe();
+
+    // header line: the Java release universe with LTS + newest highlighted
+    if let Some((available, lts, recent_lts, recent_feature)) = &universe {
+        let majors: Vec<String> = available
+            .iter()
+            .map(|m| {
+                let s = m.to_string();
+                if m == recent_feature {
+                    bold(&cyan(&s))
+                } else if lts.contains(m) {
+                    bold(&s)
+                } else {
+                    dim(&s)
+                }
+            })
+            .collect();
+        println!(
+            "{} {}   {}",
+            bold("Java majors:"),
+            majors.join(" "),
+            dim(&format!("(bold = LTS, latest LTS {recent_lts}, newest {recent_feature})"))
+        );
+        println!();
+    }
+
+    match arg {
+        // jolta available temurin  /  temurin@21
+        Some(a) if KNOWN_VENDORS.contains(&parse_spec(a).0.unwrap_or("")) || INSTALLABLE_VENDORS.contains(&a) => {
+            let (vendor, ver) = if INSTALLABLE_VENDORS.contains(&a) {
+                (a, String::new())
+            } else {
+                let (v, ver) = parse_spec(a);
+                (v.unwrap(), ver)
+            };
+            let majors: Vec<u32> = if !ver.is_empty() {
+                vec![major_of(&ver).unwrap_or_else(|| die(&format!("cannot parse '{ver}'")))]
+            } else {
+                let mut m = universe.as_ref().map(|(a, _, _, _)| a.clone()).unwrap_or_default();
+                m.sort_by_key(|x| std::cmp::Reverse(*x));
+                m
+            };
+            println!("{} {}", bold(&cyan(vendor)), dim("— published GA versions"));
+            if matches!(vendor, "oracle" | "graalvm") {
+                println!("{}", dim("  (no listing API; showing latest per major — exact installs of any published version work)"));
+            }
+            let mut any = false;
+            for major in majors {
+                let versions = vendor_versions(vendor, major);
+                if versions.is_empty() {
+                    continue;
+                }
+                any = true;
+                println!("  {}", bold(&major.to_string()));
+                for (i, v) in versions.iter().enumerate() {
+                    let latest_tag = if i == 0 { dim(" (latest)") } else { String::new() };
+                    println!("    {v}{latest_tag}{}", installed_mark(&installed, vendor, v));
+                }
+            }
+            if !any {
+                println!("  {}", dim("(nothing found — network problem, or distro doesn't publish these majors)"));
+            }
+        }
+        // jolta available 21
+        Some(a) => {
+            let major = major_of(a).unwrap_or_else(|| {
+                die(&format!("cannot parse '{a}' (try a major like 21, or a distro like temurin)"))
+            });
+            println!("{} {}", bold(&format!("Latest Java {major} by distro")), dim("(✓ = installed)"));
+            for vendor in INSTALLABLE_VENDORS {
+                match latest_remote_version(vendor, major) {
+                    Some(v) => println!("  {:<10} {}{}", cyan(vendor), bold(&v), installed_mark(&installed, vendor, &v)),
+                    None if probe_latest(vendor, major) => println!(
+                        "  {:<10} {}",
+                        cyan(vendor),
+                        dim("published (vendor hides the version until download)")
+                    ),
+                    None => println!("  {:<10} {}", cyan(vendor), dim("not published for this platform/major (archive may still have exact versions)")),
+                }
+            }
+        }
+        // jolta available
+        None => {
+            let Some((available, _, _, recent_feature)) = &universe else {
+                die("cannot reach the Adoptium release index (offline?)");
+            };
+            let mut majors_desc = available.clone();
+            majors_desc.sort_by_key(|x| std::cmp::Reverse(*x));
+            println!("{} {}", bold("Latest available by distro"), dim("(✓ = installed)"));
+            for vendor in INSTALLABLE_VENDORS {
+                // newest major this distro actually publishes (probe downward)
+                let mut hit = None;
+                for major in majors_desc.iter().take(4) {
+                    if let Some(v) = latest_remote_version(vendor, *major) {
+                        hit = Some((*major, Some(v)));
+                        break;
+                    }
+                    if probe_latest(vendor, *major) {
+                        hit = Some((*major, None));
+                        break;
+                    }
+                }
+                match hit {
+                    Some((m, v)) => {
+                        let note = if m == *recent_feature { String::new() } else { dim(&format!(" (newest at {m})")) };
+                        match v {
+                            Some(v) => println!("  {:<10} {}{note}{}", cyan(vendor), bold(&v), installed_mark(&installed, vendor, &v)),
+                            None => println!("  {:<10} {}{note}", cyan(vendor), bold(&format!("{m} (exact version shown on install)"))),
+                        }
+                    }
+                    None => println!("  {:<10} {}", cyan(vendor), dim("unreachable")),
+                }
+            }
+            println!("
+{}", dim("jolta available <major> · jolta available <distro>[@<major>] for more"));
+        }
     }
 }
 

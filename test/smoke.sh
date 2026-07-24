@@ -186,6 +186,29 @@ check "resolution now newest" "^99	99.0.1	temurin	" "$(jolta jdks | grep '^99	' 
 check "old build gone from jdks" "^0\$" "$(jolta jdks | grep -c '99.0.0' || true)"
 out=$(JOLTA_DOWNLOAD_BASE="file://$mirror" jolta update 2>&1) || true
 check "update lists managed jdk" "temurin@99" "$out"
+
+# 16c. exact point-release install + exact-pin strictness
+printf 'JAVA_VERSION="99.0.5"\nIMPLEMENTOR="Eclipse Adoptium"\n' > "$fake/release"
+mkdir -p "$mirror/temurin/99.0.5"
+tar -C "$mirror" -czf "$mirror/temurin/99.0.5/$plat.tar.gz" "$(basename "$fake")"
+out=$(JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 99.0.5 2>&1) || true
+check "exact install from mirror" "installed temurin 99.0.5" "$out"
+mkdir -p "$work/p6" && cd "$work/p6"
+echo "99.0.5" > .java-version
+check "exact pin resolves exactly" "temurin-99.0.5" "$(jolta home)"
+echo "99.0.9" > .java-version
+out=$(jolta home 2>&1) && rc=0 || rc=$?
+[ "$rc" -ne 0 ] && { pass=$((pass+1)); echo "ok   exact pin refuses other builds of same major"; } \
+  || { fail=$((fail+1)); echo "FAIL exact pin refuses other builds (got: $out)"; }
+
+# 16d. .sdkmanrc support and .java-version precedence
+mkdir -p "$work/p7" && cd "$work/p7"
+printf 'java=99.0.5-tem\n' > .sdkmanrc
+check ".sdkmanrc resolves" "temurin-99.0.5" "$(jolta home)"
+echo "99.0.1" > .java-version
+check ".java-version beats .sdkmanrc" "99.0.1" "$(jolta current 2>/dev/null | head -1)"
+cd "$work"
+jolta uninstall temurin-99.0.5 >/dev/null 2>&1 || true
 jolta uninstall temurin-99.0.1 >/dev/null 2>&1 || true
 rm -rf "$mirror"
 

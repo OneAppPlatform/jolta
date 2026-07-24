@@ -96,9 +96,15 @@ jolta default 21    # global fallback when a project has no pin
 Resolution order: `JOLTA_JAVA_VERSION` env var → nearest `.java-version` walking up →
 `jolta default` → system default JDK.
 
-Version matching is by major version, preferring an exact full-version match, then the
-highest installed build of that major. `8`, `1.8`, `21`, `21.0.4`, and `temurin-21`
-all parse.
+A major pin (`21`) matches the highest installed build of that major, any distro
+(or the pinned distro). An **exact pin** (`21.0.2`, `corretto@21.0.2`) means exact:
+it never silently accepts a different build, and auto-install fetches precisely
+that point release from the vendor (Temurin via the Adoptium API, Corretto via
+release tags, Oracle/GraalVM from their archives, Zulu via the Azul API).
+
+Migrating from SDKMAN? Jolta also honors **`.sdkmanrc`** (`java=21.0.2-tem`) with
+vendor mapping (`-tem`, `-amzn`, `-zulu`, `-graal`, `-oracle`), whenever no
+`.java-version` claims the directory.
 
 ## Distros
 
@@ -110,9 +116,9 @@ jolta pin corretto@21        # this project wants Amazon Corretto 21
 jolta install graalvm@25     # explicitly fetch a GraalVM JDK
 ```
 
-- **Downloadable distros:** `temurin` (default), `corretto`, `graalvm`, `oracle`.
+- **Downloadable distros:** `temurin` (default), `corretto`, `graalvm`, `oracle`, `zulu`.
 - **Recognized when matching** (installed JDKs are identified by their release
-  metadata and path): those four plus `zulu` and `openjdk` (Homebrew builds).
+  metadata and path): those five plus `openjdk` (Homebrew builds).
 - A distro-qualified pin only matches that distro — `corretto-21` will pick an
   installed Corretto 21 over a Homebrew OpenJDK 21, and auto-install Corretto if
   it's missing. A bare `21` matches any distro of major 21.
@@ -124,6 +130,9 @@ jolta install graalvm@25     # explicitly fetch a GraalVM JDK
 Homebrew-style, for the JDKs jolta itself downloaded:
 
 ```sh
+jolta available     # what's out there: latest per distro (alias: ls-remote)
+jolta available 21  # each distro's latest 21.x
+jolta available temurin@21   # every published Temurin 21.x, installed ones marked
 jolta update        # check for newer point releases (alias: jolta outdated)
 jolta upgrade       # upgrade all jolta-managed JDKs, pruning superseded builds
 jolta upgrade 21    # or just one (also corretto@21 etc.)
@@ -149,7 +158,8 @@ lock), and can be disabled with `JOLTA_NO_AUTO_INSTALL=1`.
 
 Restricted or offline networks: discovery of preinstalled JDKs is fully local, and
 `JOLTA_DOWNLOAD_BASE` points downloads at an internal mirror instead of the vendor
-endpoints. The mirror uses a flat layout — `{base}/{vendor}/{major}/{os}-{arch}.{ext}`
+endpoints. The mirror uses a flat layout — `{base}/{vendor}/{version}/{os}-{arch}.{ext}`
+(`version` is the requested spec: a major like `21` or an exact `21.0.2`)
 with `macos|linux|windows`, `aarch64|x64`, and `tar.gz` (`zip` on Windows), e.g.
 `https://artifacts.corp/jdks/temurin/21/linux-x64.tar.gz`.
 
@@ -166,7 +176,8 @@ jolta install corretto@21  # or another distro
 | `jolta setup` | Install shims + shell profile setup |
 | `jolta pin <v>` | Write `.java-version` in the current directory |
 | `jolta default <v>` | Set the global fallback version |
-| `jolta install <spec>` | Download a JDK (`21`, `corretto@21`, `graalvm@25`) |
+| `jolta install <spec>` | Download a JDK (`21`, `21.0.2`, `corretto@21`, `zulu@21.0.4`) |
+| `jolta available [x]` | What's installable: latest per distro, per-major, or full per-distro listings |
 | `jolta update` | Check jolta-managed JDKs for newer point releases |
 | `jolta upgrade [spec]` | Upgrade jolta-managed JDKs, pruning old builds |
 | `jolta jdks` | Machine-readable list: `major`/`version`/`distro`/`home` |

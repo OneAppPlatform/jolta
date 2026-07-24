@@ -4,9 +4,9 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::install::install_vendor_major;
+use crate::install::install_vendor_spec;
 use crate::jdk::{
-    has_java, list_all, major_of, numkey, parse_spec, system_default, vendor_of,
+    has_java, is_exact, list_all, major_of, numkey, parse_spec, system_default, vendor_of,
     INSTALLABLE_VENDORS,
 };
 use crate::paths::jolta_home;
@@ -39,6 +39,10 @@ pub fn best_match(
         if best.map_or(true, |(bk, _)| k >= bk) {
             best = Some((k, home));
         }
+    }
+    // An exact spec means exact: never satisfy "21.0.2" with some other 21.x
+    if is_exact(version) {
+        return exact.cloned();
     }
     exact.or(best.map(|(_, h)| h)).cloned()
 }
@@ -78,6 +82,41 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
     Some(home)
 }
 
+/// "java=21.0.2-tem" -> "temurin@21.0.2". Unknown/absent suffixes become
+/// vendorless specs (best matching installed distro).
+fn parse_sdkmanrc(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(value) = line.strip_prefix("java=") else { continue };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let (version, suffix) = match value.rsplit_once('-') {
+            Some((v, s)) => (v, s),
+            None => (value, ""),
+        };
+        let vendor = match suffix {
+            "tem" => "temurin",
+            "amzn" => "corretto",
+            "zulu" => "zulu",
+            "graal" | "graalce" => "graalvm",
+            "oracle" => "oracle",
+            _ => "",
+        };
+        return Some(if vendor.is_empty() {
+            // unknown distro suffix: match on version across any distro
+            version.to_string()
+        } else {
+            format!("{vendor}@{version}")
+        });
+    }
+    None
+}
+
 pub struct Pin {
     pub spec: Option<String>,
     pub source: String,
@@ -100,6 +139,19 @@ pub fn read_pin() -> Pin {
             if let Ok(text) = fs::read_to_string(&f) {
                 let spec = text.lines().next().unwrap_or("").trim().to_string();
                 if !spec.is_empty() {
+                    return Pin {
+                        spec: Some(spec),
+                        source: f.display().to_string(),
+                    };
+                }
+            }
+        }
+        // SDKMAN migration: honor .sdkmanrc (java=21.0.2-tem) when no
+        // .java-version claims this directory
+        let f = dir.join(".sdkmanrc");
+        if f.is_file() {
+            if let Ok(text) = fs::read_to_string(&f) {
+                if let Some(spec) = parse_sdkmanrc(&text) {
                     return Pin {
                         spec: Some(spec),
                         source: f.display().to_string(),
@@ -144,12 +196,13 @@ fn try_auto_install(spec: &str) -> bool {
         );
         return false;
     }
+    let _ = major;
     eprintln!(
-        "{} Java {spec} is pinned here but not installed — fetching {vendor} {major} {}",
+        "{} Java {spec} is pinned here but not installed — fetching {vendor} {version} {}",
         paint("33", "jolta:", true),
         paint("2", "(set JOLTA_NO_AUTO_INSTALL=1 to disable)", true)
     );
-    install_vendor_major(vendor, major).is_ok()
+    install_vendor_spec(vendor, &version).is_ok()
 }
 
 pub struct Resolved {

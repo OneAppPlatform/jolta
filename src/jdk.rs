@@ -7,7 +7,7 @@ use std::process::Command;
 use crate::paths::{home_dir, jolta_home};
 
 /// JDK distros jolta knows how to download. The default is temurin.
-pub const INSTALLABLE_VENDORS: [&str; 4] = ["temurin", "corretto", "graalvm", "oracle"];
+pub const INSTALLABLE_VENDORS: [&str; 5] = ["temurin", "corretto", "graalvm", "oracle", "zulu"];
 /// Vendors recognized for pinning/matching (superset of the installable ones).
 pub const KNOWN_VENDORS: [&str; 6] = ["temurin", "corretto", "graalvm", "oracle", "zulu", "openjdk"];
 
@@ -38,6 +38,12 @@ pub fn major_of(version: &str) -> Option<u32> {
         return second.parse().ok();
     }
     Some(first)
+}
+
+/// Is this version an exact point release ("21.0.2") rather than a major
+/// ("21")? Legacy "1.8" counts as major 8, not exact.
+pub fn is_exact(version: &str) -> bool {
+    !version.starts_with("1.") && version.contains('.')
 }
 
 /// Sortable key from "21.0.4+7" -> 21_000_004 etc.
