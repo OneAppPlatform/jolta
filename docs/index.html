@@ -201,7 +201,9 @@ commit it to your repo:</p>
 <pre><code>jolta pin 21        # this project uses Java 21
 jolta default 21    # global fallback when a project has no pin</code></pre>
 <p>Resolution order: <code>JOLTA_JAVA_VERSION</code> env var → nearest
-<code>.java-version</code> walking up → <code>jolta default</code> → system default JDK.</p>
+<code>.java-version</code> walking up → <code>jolta default</code> → system default JDK.
+On a machine with no JDK at all, the first <code>java</code> run installs the latest
+LTS (Temurin) and sets it as your default.</p>
 <p>A major pin (<code>21</code>) matches the highest installed build of that major.
 An exact pin (<code>21.0.2</code>) means exact — never silently substituted, and
 auto-installed precisely. <code>.sdkmanrc</code> files (<code>java=21.0.2-tem</code>)

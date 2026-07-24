@@ -27,3 +27,27 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./test/smoke.ps1
+
+  fresh-bootstrap:
+    name: fresh machine bootstrap (no JDK anywhere)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (musl, static)
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+          cargo build --release --target x86_64-unknown-linux-musl
+      - name: First java run installs the latest LTS and sets the default
+        run: |
+          docker run --rm -v "$PWD/target/x86_64-unknown-linux-musl/release/jolta:/usr/local/bin/jolta:ro" \
+            ubuntu:24.04 sh -eux -c '
+              apt-get update -q >/dev/null && apt-get install -y -q curl ca-certificates >/dev/null
+              command -v java && exit 1  # the box must start with no JDK
+              export JOLTA_HOME=/root/.jolta
+              jolta exec java -version 2>&1 | tee /tmp/out
+              grep -q "latest LTS" /tmp/out
+              grep -q "openjdk" /tmp/out
+              grep -Eq "^[0-9]+$" /root/.jolta/default
+              [ "$(jolta current | head -n1)" ] && jolta current
+            '

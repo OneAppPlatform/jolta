@@ -94,7 +94,9 @@ jolta default 21    # global fallback when a project has no pin
 ```
 
 Resolution order: `JOLTA_JAVA_VERSION` env var → nearest `.java-version` walking up →
-`jolta default` → system default JDK.
+`jolta default` → system default JDK. On a machine with no JDK at all, the first
+`java` run installs the latest LTS (Temurin) and sets it as your default —
+disable with `JOLTA_NO_AUTO_INSTALL=1`.
 
 A major pin (`21`) matches the highest installed build of that major, any distro
 (or the pinned distro). An **exact pin** (`21.0.2`, `corretto@21.0.2`) means exact:

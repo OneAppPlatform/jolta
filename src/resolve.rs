@@ -4,13 +4,17 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::install::install_vendor_spec;
+use crate::install::{install_vendor_spec, release_universe};
 use crate::jdk::{
     has_java, is_exact, list_all, major_of, numkey, parse_spec, system_default, vendor_of,
     INSTALLABLE_VENDORS,
 };
 use crate::paths::jolta_home;
 use crate::ui::{die, paint};
+
+/// Newest LTS major, used only when the Adoptium metadata endpoint is
+/// unreachable but downloads still work (e.g. JOLTA_DOWNLOAD_BASE mirrors).
+const FALLBACK_LTS: u32 = 25;
 
 /// Best home for a spec: filter by major (and distro when the spec names one,
 /// e.g. "corretto-21"); exact full-version match wins, else highest build.
@@ -241,13 +245,35 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
             Resolved { home, source: pin.source }
         }
         None => {
-            let home = system_default().unwrap_or_else(|| {
-                die(
-                    "no Java version pinned and no system JDK found\n  pin one with 'jolta pin <version>' \
-                     or set a global default with 'jolta default <version>'",
-                )
-            });
-            Resolved { home, source: pin.source }
+            if let Some(home) = system_default() {
+                return Resolved { home, source: pin.source };
+            }
+            // Fresh machine: no pin, no default, no JDK anywhere. Hands-off
+            // means `java` still works — fetch the latest LTS and make it
+            // the global default.
+            if auto_install && env::var("JOLTA_NO_AUTO_INSTALL").is_err() {
+                let major = release_universe().map_or(FALLBACK_LTS, |(_, _, lts, _)| lts);
+                let spec = major.to_string();
+                eprintln!(
+                    "{} no Java pinned and none installed — fetching Temurin {major} (latest LTS) and setting it as your default {}",
+                    paint("33", "jolta:", true),
+                    paint("2", "(set JOLTA_NO_AUTO_INSTALL=1 to disable)", true)
+                );
+                if install_vendor_spec("temurin", &spec).is_ok() {
+                    let _ = fs::create_dir_all(jolta_home());
+                    let _ = fs::write(jolta_home().join("default"), format!("{spec}\n"));
+                    if let Some(home) = resolve(&spec) {
+                        return Resolved {
+                            home,
+                            source: format!("jolta default ({spec}, latest LTS, installed on first run)"),
+                        };
+                    }
+                }
+            }
+            die(
+                "no Java version pinned and no system JDK found\n  pin one with 'jolta pin <version>' \
+                 or set a global default with 'jolta default <version>'",
+            )
         }
     }
 }
