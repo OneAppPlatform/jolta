@@ -4,7 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jolta — the hands-off Java version manager</title>
-<meta name="description" content="Like Volta, but for Java. Pin a JDK per project with .java-version and never switch manually again. macOS, Linux, Windows.">
+<meta name="description" content="Like Volta, but for Java. Pin a JDK per project with .java-version and jolta switches automatically — auto-installs missing JDKs, keeps JAVA_HOME in sync for Maven and Gradle. One binary for macOS, Linux, and Windows.">
+<link rel="canonical" href="https://oneappplatform.github.io/jolta/">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+<link rel="apple-touch-icon" href="favicon-192.png">
+<meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141c25" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Jolta">
+<meta property="og:title" content="Jolta — the hands-off Java version manager">
+<meta property="og:description" content="Like Volta, but for Java. Pin a JDK per project with .java-version and never switch manually again. macOS, Linux, Windows.">
+<meta property="og:url" content="https://oneappplatform.github.io/jolta/">
+<meta property="og:image" content="https://oneappplatform.github.io/jolta/logo.png">
+<meta property="og:image:width" content="674">
+<meta property="og:image:height" content="270">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Jolta — the hands-off Java version manager">
+<meta name="twitter:description" content="Like Volta, but for Java. Pin a JDK per project with .java-version and never switch manually again. macOS, Linux, Windows.">
+<meta name="twitter:image" content="https://oneappplatform.github.io/jolta/logo.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Jolta",
+  "description": "Hands-off Java version manager. Pin a JDK per project with .java-version; jolta resolves, auto-installs, and keeps JAVA_HOME in sync for Maven and Gradle.",
+  "url": "https://oneappplatform.github.io/jolta/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux, Windows",
+  "softwareVersion": "0.5.3",
+  "license": "https://opensource.org/license/mit",
+  "downloadUrl": "https://github.com/OneAppPlatform/jolta/releases",
+  "sameAs": "https://github.com/OneAppPlatform/jolta",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
 <style>
 :root {
   --bg: #ffffff; --fg: #1c2733; --muted: #5b6b7b; --accent: #1d5aa7;
@@ -43,13 +77,23 @@ td.y { color: #2e9e5b; font-weight: 600; }
 td.n { color: #c05555; }
 td.m { color: var(--accent2); }
 .cmp td, .cmp th { white-space: nowrap; }
+.cmp td:not(:first-child), .cmp th:not(:first-child) { text-align: center; }
 .demo b { color: var(--accent2); font-weight: 600; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.install-grid { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
+.install-card { border: 1px solid var(--border); border-radius: 10px; padding: 4px 20px 16px; background: var(--hero-bg); }
+.install-card h3 { margin-top: 14px; display: flex; align-items: baseline; gap: 10px; }
+.install-card .arch { font-size: .8rem; font-weight: 400; color: var(--muted); }
+.install-card .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 0 28px; }
+.install-card pre { font-size: .88rem; white-space: pre-wrap; word-break: break-all; }
+.install-card p { font-size: .92rem; margin: 10px 0 6px; }
 </style>
 </head>
 <body>
 
 <header class="hero">
   <div class="wrap">
+    <h1 class="sr-only">Jolta — the hands-off Java version manager</h1>
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="logo-dark.png">
       <img src="logo.png" alt="Jolta — the hands-off Java version manager">
@@ -85,17 +129,50 @@ $ cd ../legacy-app      <b># has .java-version with "8"</b>
 $ java -version         <b># → 1.8 — no sdk use, no jenv shell, no export JAVA_HOME</b></code></pre>
 
 <h2 id="install">Install</h2>
-<p>Homebrew (macOS &amp; Linux):</p>
-<pre><code>brew install OneAppPlatform/tap/jolta
+<p>Prebuilt binaries for every platform — no Rust toolchain, no runtime, nothing to
+compile.</p>
+
+<div class="install-grid">
+  <div class="install-card">
+    <h3 id="install-macos">macOS <span class="arch">Apple Silicon &amp; Intel</span></h3>
+    <div class="opts">
+      <div>
+        <p>Homebrew:</p>
+        <pre><code>brew install OneAppPlatform/tap/jolta
 jolta setup</code></pre>
-<p>Or one line with no clone left behind — the installer downloads a prebuilt
-binary for your platform (building from source only if none exists):</p>
-<pre><code>curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh</code></pre>
-<p><strong>Windows</strong> — download <code>jolta-x86_64-pc-windows-msvc.zip</code> from the
-<a href="https://github.com/OneAppPlatform/jolta/releases">releases page</a>, unzip, run
-<code>.\jolta.exe setup</code>, then follow the two printed steps (add the shims
-directory to your user <code>PATH</code>, and add the PowerShell hook line to your
-<code>$PROFILE</code>).</p>
+      </div>
+      <div>
+        <p>Or the one-line installer:</p>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="install-card">
+    <h3 id="install-linux">Linux <span class="arch">x86_64 &amp; arm64 · static musl, any distro</span></h3>
+    <div class="opts">
+      <div>
+        <p>One-line installer:</p>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh</code></pre>
+      </div>
+      <div>
+        <p>Or Homebrew on Linux:</p>
+        <pre><code>brew install OneAppPlatform/tap/jolta
+jolta setup</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="install-card">
+    <h3 id="install-windows">Windows <span class="arch">x86_64</span></h3>
+    <p>Download <code>jolta-x86_64-pc-windows-msvc.zip</code> from the
+    <a href="https://github.com/OneAppPlatform/jolta/releases">releases page</a>, unzip, then:</p>
+    <pre><code>.\jolta.exe setup</code></pre>
+    <p>Follow the two printed steps: add the shims directory to your user
+    <code>PATH</code>, and add the PowerShell hook line to your <code>$PROFILE</code>.</p>
+  </div>
+</div>
+
 <p>Verify with a new shell:</p>
 <pre><code>jolta doctor</code></pre>
 
@@ -201,33 +278,33 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td><code>.java-version</code> honored by default</td>
   <td class="y">✓</td><td class="m">opt-in</td><td class="n">✗</td><td class="y">✓</td><td class="m">opt-in</td></tr>
 <tr><td><code>.sdkmanrc</code> honored</td>
-  <td class="y">✓ vendor-mapped</td><td class="m">opt-in</td><td class="m">opt-in (auto-env)</td><td class="n">✗</td><td class="n">✗</td></tr>
+  <td class="y">✓</td><td class="m">opt-in</td><td class="m">opt-in</td><td class="n">✗</td><td class="n">✗</td></tr>
 <tr><td><code>JAVA_HOME</code> set automatically</td>
-  <td class="y">✓ shims + cd hook</td><td class="m">activate mode only</td><td class="y">✓</td><td class="m">plugin</td><td class="m">plugin script</td></tr>
+  <td class="y">✓</td><td class="m">opt-in</td><td class="y">✓</td><td class="m">plugin</td><td class="m">plugin</td></tr>
 <tr><td>Downloads JDKs</td>
-  <td class="y">✓ 5 distros</td><td class="y">✓ (no GraalVM)</td><td class="y">✓ many</td><td class="n">✗</td><td class="y">✓ many</td></tr>
+  <td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td></tr>
 <tr><td>Auto-install on first <code>java</code> run</td>
   <td class="y">✓</td><td class="m">partial</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
 <tr><td>Exact point-release pinning</td>
-  <td class="y">✓ strict</td><td class="y">✓</td><td class="y">✓</td><td class="m">if installed</td><td class="y">✓</td></tr>
+  <td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="m">partial</td><td class="y">✓</td></tr>
 <tr><td>GraalVM</td>
   <td class="y">✓</td><td class="n">✗</td><td class="y">✓</td><td class="m">manual</td><td class="y">✓</td></tr>
 <tr><td>Finds JDKs you already have (brew, system)</td>
-  <td class="y">✓ automatic</td><td class="n">✗</td><td class="n">✗</td><td class="m">manual add</td><td class="n">✗</td></tr>
+  <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="m">manual</td><td class="n">✗</td></tr>
 <tr><td>Point-release upgrades with cleanup</td>
-  <td class="y">✓ upgrade + prune</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="m">manual</td></tr>
+  <td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="m">manual</td></tr>
 <tr><td>Remote catalog browsing</td>
-  <td class="y">✓ cached, 16&nbsp;ms warm</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td></tr>
+  <td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td></tr>
 <tr><td>Native Windows</td>
   <td class="y">✓</td><td class="y">✓</td><td class="n">WSL</td><td class="n">✗</td><td class="n">✗</td></tr>
 <tr><td>Corporate mirror support</td>
-  <td class="y">✓ one env var</td><td class="m">URL regex</td><td class="n">✗</td><td class="n">n/a</td><td class="m">per-plugin</td></tr>
+  <td class="y">✓</td><td class="m">partial</td><td class="n">✗</td><td class="n">✗</td><td class="m">partial</td></tr>
 <tr><td>Also manages Maven/Gradle/other tools</td>
-  <td class="n">✗ Java only, by design</td><td class="y">✓ polyglot</td><td class="y">✓ JVM ecosystem</td><td class="n">✗</td><td class="y">✓ polyglot</td></tr>
+  <td class="n">✗</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td></tr>
 <tr><td>Zero config files of its own</td>
   <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="y">✓</td><td class="n">✗</td></tr>
 <tr><td>Battle-tested since</td>
-  <td class="m">2026 (yes, yesterday)</td><td class="y">2023</td><td class="y">2012</td><td class="y">2011</td><td class="y">2014</td></tr>
+  <td class="m">2026</td><td class="y">2023</td><td class="y">2012</td><td class="y">2011</td><td class="y">2014</td></tr>
 </table>
 <p class="muted">Fair summary: if Java is one of five languages you juggle, mise is
 excellent. If Java is the job, jolta does the whole job by default — nothing to
