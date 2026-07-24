@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-[![CI](https://github.com/dave-oneapp/jolta/actions/workflows/ci.yml/badge.svg)](https://github.com/dave-oneapp/jolta/actions/workflows/ci.yml)
+[![CI](https://github.com/OneAppPlatform/jolta/actions/workflows/ci.yml/badge.svg)](https://github.com/OneAppPlatform/jolta/actions/workflows/ci.yml)
 
 **Like [Volta](https://volta.sh), but for Java.** Pin a JDK version per project and never
 manually switch again — `java`, `javac`, `mvn`-launched builds, everything just uses the
@@ -39,13 +39,13 @@ One-liner (no clone left behind — fetches a tarball to a temp dir, builds,
 installs into `~/.jolta`, and cleans up):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh
 ```
 
 Or from a clone:
 
 ```sh
-git clone https://github.com/dave-oneapp/jolta.git && cd jolta
+git clone https://github.com/OneAppPlatform/jolta.git && cd jolta
 cargo build --release && ./target/release/jolta setup
 ```
 
@@ -56,7 +56,7 @@ enabling the `JAVA_HOME` cd hook. Open a new shell and run `jolta doctor` to ver
 Re-running setup from a newer build upgrades the installed copy.
 
 **Windows:** download `jolta-x86_64-pc-windows-msvc.zip` from the
-[releases page](https://github.com/dave-oneapp/jolta/releases), unzip, and run
+[releases page](https://github.com/OneAppPlatform/jolta/releases), unzip, and run
 `.\jolta.exe setup` (or build from source with `cargo build --release`),
 then follow the two printed steps: add the shims and bin directories to your user
 `PATH`, and add `jolta hook powershell | Out-String | Invoke-Expression` to your

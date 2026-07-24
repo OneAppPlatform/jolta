@@ -3,10 +3,10 @@
 # platform (building from source with cargo otherwise), runs 'jolta setup'
 # (self-contained install into ~/.jolta), and leaves nothing else behind.
 #
-#   curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh
 set -eu
 
-REPO=${JOLTA_REPO:-dave-oneapp/jolta}
+REPO=${JOLTA_REPO:-OneAppPlatform/jolta}
 REF=${JOLTA_REF:-main}
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/jolta-installer.XXXXXX")
