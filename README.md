@@ -1,4 +1,6 @@
-# Jolta
+<p align="center">
+  <img src="assets/logo.png" alt="Jolta — the hands-off Java version manager" width="480">
+</p>
 
 [![CI](https://github.com/dave-oneapp/jolta/actions/workflows/ci.yml/badge.svg)](https://github.com/dave-oneapp/jolta/actions/workflows/ci.yml)
 
