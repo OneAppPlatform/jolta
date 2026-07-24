@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jolta — the hands-off Java version manager</title>
+<meta name="description" content="Like Volta, but for Java. Pin a JDK per project with .java-version and never switch manually again. macOS, Linux, Windows.">
+<style>
+:root {
+  --bg: #ffffff; --fg: #1c2733; --muted: #5b6b7b; --accent: #1d5aa7;
+  --accent2: #e8871e; --code-bg: #f4f6f8; --border: #e3e8ee; --hero-bg: #f8fafc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10161d; --fg: #dfe7ef; --muted: #93a3b3; --accent: #6aa9e8;
+    --accent2: #f0a04b; --code-bg: #1a222c; --border: #26313d; --hero-bg: #141c25;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 17px/1.65 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--fg); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+header.hero { background: var(--hero-bg); border-bottom: 1px solid var(--border); padding: 56px 0 40px; text-align: center; }
+.hero img { max-width: 420px; width: 90%; height: auto; background: #fff; padding: 14px 22px; border-radius: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+.hero p.tag { font-size: 1.25rem; color: var(--muted); margin: 18px auto 8px; max-width: 560px; }
+nav.toc { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--border); z-index: 5; }
+nav.toc .wrap { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 10px 24px; font-size: .95rem; }
+main { padding: 8px 0 64px; }
+h2 { margin-top: 2.6em; padding-top: .4em; border-top: 1px solid var(--border); font-size: 1.5rem; }
+h3 { margin-top: 1.8em; font-size: 1.15rem; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: .92rem; line-height: 1.5; }
+code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+p code, li code, td code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: .08em .35em; font-size: .88em; }
+table { border-collapse: collapse; width: 100%; font-size: .95rem; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+.muted { color: var(--muted); }
+.pill { display: inline-block; background: var(--code-bg); border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; font-size: .85rem; margin: 2px; }
+footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(--muted); font-size: .9rem; text-align: center; }
+.demo { color: var(--muted); }
+.demo b { color: var(--accent2); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <img src="logo.png" alt="Jolta — the hands-off Java version manager">
+    <p class="tag">Like <a href="https://volta.sh">Volta</a>, but for Java. Pin a JDK per project and never switch manually again.</p>
+    <p>
+      <span class="pill">macOS</span><span class="pill">Linux</span><span class="pill">Windows</span>
+      <span class="pill">zero dependencies</span><span class="pill">MIT</span>
+    </p>
+    <p><a href="https://github.com/dave-oneapp/jolta">GitHub</a> ·
+       <a href="https://github.com/dave-oneapp/jolta/releases">Releases</a></p>
+  </div>
+</header>
+
+<nav class="toc"><div class="wrap">
+  <a href="#install">Install</a>
+  <a href="#how">How it works</a>
+  <a href="#pinning">Pinning</a>
+  <a href="#distros">Distros</a>
+  <a href="#java-home">JAVA_HOME &amp; builds</a>
+  <a href="#commands">Commands</a>
+  <a href="#uninstall">Uninstall</a>
+</div></nav>
+
+<main class="wrap">
+
+<pre class="demo"><code>$ cd my-service
+$ jolta pin 21          <b># writes .java-version</b>
+$ java -version         <b># → OpenJDK 21, automatically</b>
+
+$ cd ../legacy-app      <b># has .java-version with "8"</b>
+$ java -version         <b># → 1.8 — no sdk use, no jenv shell, no export JAVA_HOME</b></code></pre>
+
+<h2 id="install">Install</h2>
+<p>macOS &amp; Linux — one line, no clone left behind. The installer downloads a
+prebuilt binary for your platform (building from source only if none exists):</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh</code></pre>
+<p><strong>Windows</strong> — download <code>jolta-x86_64-pc-windows-msvc.zip</code> from the
+<a href="https://github.com/dave-oneapp/jolta/releases">releases page</a>, unzip, run
+<code>.\jolta.exe setup</code>, then follow the two printed steps (add the shims
+directory to your user <code>PATH</code>, and add the PowerShell hook line to your
+<code>$PROFILE</code>).</p>
+<p>Verify with a new shell:</p>
+<pre><code>jolta doctor</code></pre>
+
+<h2 id="how">How it works</h2>
+<p>Jolta puts lightweight <strong>shims</strong> on your <code>PATH</code>
+(<code>java</code>, <code>javac</code>, <code>jar</code>, <code>jshell</code>, …) — each one a
+link to the single jolta binary. Every invocation walks up from the current directory to
+the nearest <code>.java-version</code>, resolves an installed JDK for it, sets
+<code>JAVA_HOME</code>, and execs the real tool. Resolution takes ~2&nbsp;ms, invisible
+next to JVM startup.</p>
+<p>If a project pins a version you don't have, the first invocation
+<strong>downloads it on demand</strong> (Volta-style) from the distro's official endpoint —
+never triggered by merely <code>cd</code>-ing around, safe under parallel builds, and
+disabled with <code>JOLTA_NO_AUTO_INSTALL=1</code>.</p>
+<p>Jolta also finds the JDKs you already have: Homebrew,
+<code>/Library/Java/JavaVirtualMachines</code>, SDKMAN, <code>/usr/lib/jvm</code>,
+Windows <code>Program Files</code>, and <code>JAVA_HOME_&lt;major&gt;_*</code> environment
+variables.</p>
+
+<h2 id="pinning">Pinning</h2>
+<p>The pin is a plain <code>.java-version</code> file (compatible with jenv and asdf) —
+commit it to your repo:</p>
+<pre><code>jolta pin 21        # this project uses Java 21
+jolta default 21    # global fallback when a project has no pin</code></pre>
+<p>Resolution order: <code>JOLTA_JAVA_VERSION</code> env var → nearest
+<code>.java-version</code> walking up → <code>jolta default</code> → system default JDK.</p>
+<p>Matching is by major version, preferring an exact full-version match, then the highest
+installed build of that major. <code>8</code>, <code>1.8</code>, <code>21</code>,
+<code>21.0.4</code>, and <code>temurin-21</code> all parse.</p>
+
+<h2 id="distros">Distros</h2>
+<p>A spec can name a JDK distribution as <code>distro@version</code> or
+<code>distro-version</code>:</p>
+<pre><code>jolta pin corretto@21        # this project wants Amazon Corretto 21
+jolta install graalvm@25     # explicitly fetch a GraalVM JDK</code></pre>
+<ul>
+  <li><strong>Downloadable:</strong> <code>temurin</code> (default), <code>corretto</code>,
+      <code>graalvm</code>, <code>oracle</code>.</li>
+  <li><strong>Recognized when matching:</strong> those four plus <code>zulu</code> and
+      <code>openjdk</code> (Homebrew builds).</li>
+  <li>A distro-qualified pin is strict — <code>corretto-21</code> picks an installed
+      Corretto 21 over a Homebrew OpenJDK 21, and auto-installs Corretto if missing.
+      A bare <code>21</code> matches any distro.</li>
+</ul>
+
+<h2 id="java-home">JAVA_HOME, Maven &amp; Gradle</h2>
+<p>Two mechanisms keep <code>JAVA_HOME</code> correct:</p>
+<ol>
+  <li><strong>Shims</strong> export it for everything they exec.</li>
+  <li><strong>The shell hook</strong> (installed by setup; zsh, bash, and PowerShell)
+      re-resolves it every time you change directory — covering tools that read
+      <code>JAVA_HOME</code> directly, like Maven, Gradle, and IDEs launched from a
+      terminal. If a pin can't be satisfied the hook <em>unsets</em>
+      <code>JAVA_HOME</code>, so builds fail loudly rather than silently using the wrong
+      JDK.</li>
+</ol>
+<p>Don't <code>export JAVA_HOME</code> manually in your profile — the hook owns it. In
+scripts and CI, use <code>jolta exec mvn ...</code> or
+<code>eval "$(jolta env)"</code>. <code>jolta doctor</code> flags stale values.</p>
+
+<h2 id="commands">Commands</h2>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>jolta setup</code></td><td>Install shims + shell profile setup</td></tr>
+<tr><td><code>jolta pin &lt;spec&gt;</code></td><td>Write <code>.java-version</code> in the current directory</td></tr>
+<tr><td><code>jolta default &lt;spec&gt;</code></td><td>Set the global fallback version</td></tr>
+<tr><td><code>jolta install &lt;spec&gt;</code></td><td>Download a JDK (<code>21</code>, <code>corretto@21</code>, <code>graalvm@25</code>)</td></tr>
+<tr><td><code>jolta uninstall &lt;name&gt;</code></td><td>Remove a jolta-managed JDK</td></tr>
+<tr><td><code>jolta list</code></td><td>List visible JDKs with distro, star the active one</td></tr>
+<tr><td><code>jolta jdks</code></td><td>Machine-readable list: major / version / distro / home</td></tr>
+<tr><td><code>jolta current</code></td><td>Show the version resolved here, and why</td></tr>
+<tr><td><code>jolta which [tool]</code></td><td>Full path the shim would exec</td></tr>
+<tr><td><code>jolta exec &lt;cmd&gt;</code></td><td>Run any command with <code>JAVA_HOME</code>/<code>PATH</code> set</td></tr>
+<tr><td><code>jolta env</code></td><td>Print <code>export</code> lines for <code>eval</code></td></tr>
+<tr><td><code>jolta home</code></td><td>Print the resolved <code>JAVA_HOME</code></td></tr>
+<tr><td><code>jolta hook [shell]</code></td><td>Print the cd hook (zsh, bash, powershell)</td></tr>
+<tr><td><code>jolta reshim</code></td><td>Regenerate shims after installing JDKs elsewhere</td></tr>
+<tr><td><code>jolta doctor</code></td><td>Diagnose PATH / shim / <code>JAVA_HOME</code> problems</td></tr>
+<tr><td><code>jolta implode</code></td><td>Uninstall jolta completely</td></tr>
+</table>
+
+<h2 id="uninstall">Uninstall</h2>
+<pre><code>jolta implode</code></pre>
+<p>Removes <code>~/.jolta</code> and the jolta lines from your shell profile, after a
+confirmation prompt that lists exactly which jolta-installed JDKs will be deleted.
+JDKs installed outside jolta and your <code>.java-version</code> files are never touched —
+jolta only ever deletes what it downloaded itself.</p>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    Jolta is MIT-licensed. Built in dependency-free Rust; one binary is both the CLI and every shim.<br>
+    <a href="https://github.com/dave-oneapp/jolta">github.com/dave-oneapp/jolta</a>
+  </div>
+</footer>
+
+</body>
+</html>

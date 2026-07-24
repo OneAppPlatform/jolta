@@ -4,9 +4,6 @@
 # (self-contained install into ~/.jolta), and leaves nothing else behind.
 #
 #   curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
-#
-# While the repo is private, downloads need auth, so the script falls back to
-# an authenticated 'gh' CLI at each step.
 set -eu
 
 REPO=${JOLTA_REPO:-dave-oneapp/jolta}
@@ -26,9 +23,7 @@ esac
 if [ -n "$target" ]; then
   asset="jolta-$target.tar.gz"
   url="https://github.com/$REPO/releases/latest/download/$asset"
-  if curl -fsSL -o "$tmp/$asset" "$url" 2>/dev/null \
-     || { command -v gh >/dev/null 2>&1 \
-          && gh release download -R "$REPO" -p "$asset" -O "$tmp/$asset" 2>/dev/null; }; then
+  if curl -fsSL -o "$tmp/$asset" "$url" 2>/dev/null; then
     echo "jolta installer: using prebuilt binary ($target)"
     tar -xzf "$tmp/$asset" -C "$tmp"
     "$tmp/jolta" setup
@@ -45,15 +40,10 @@ command -v cargo >/dev/null 2>&1 || {
 }
 echo "jolta installer: fetching $REPO@$REF"
 srcurl="https://codeload.github.com/$REPO/tar.gz/refs/heads/$REF"
-if curl -fsSL "$srcurl" -o "$tmp/jolta-src.tar.gz" 2>/dev/null; then
-  :
-elif command -v gh >/dev/null 2>&1 && gh api "repos/$REPO/tarball/$REF" > "$tmp/jolta-src.tar.gz" 2>/dev/null; then
-  echo "jolta installer: repo is private; downloaded via gh instead"
-else
+curl -fsSL "$srcurl" -o "$tmp/jolta-src.tar.gz" || {
   echo "jolta installer: could not download $srcurl" >&2
-  echo "  (private repo? authenticate 'gh' or clone manually and run 'cargo build --release')" >&2
   exit 1
-fi
+}
 mkdir -p "$tmp/src"
 tar -xzf "$tmp/jolta-src.tar.gz" -C "$tmp/src" --strip-components=1
 echo "jolta installer: building (release)"

@@ -39,9 +39,7 @@ installs into `~/.jolta`, and cleans up):
 curl -fsSL https://raw.githubusercontent.com/dave-oneapp/jolta/main/install.sh | sh
 ```
 
-> While this repo is private, the raw URL needs auth — either run
-> `gh api repos/dave-oneapp/jolta/contents/install.sh -H "Accept: application/vnd.github.raw" | sh`
-> (the installer itself falls back to `gh` for the tarball too), or use the clone route:
+Or from a clone:
 
 ```sh
 git clone https://github.com/dave-oneapp/jolta.git && cd jolta
