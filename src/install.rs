@@ -26,6 +26,13 @@ fn vendor_url(vendor: &str, major: u32) -> String {
         other => die(&format!("unsupported architecture: {other}")),
     };
     let ext = if os == "windows" { "zip" } else { "tar.gz" };
+    // Restricted networks: JOLTA_DOWNLOAD_BASE points all downloads at an
+    // internal mirror using a flat, predictable layout instead of the three
+    // different vendor URL schemes (see issue #2).
+    if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
+        let base = base.trim_end_matches('/');
+        return format!("{base}/{vendor}/{major}/{os}-{arch}.{ext}");
+    }
     match vendor {
         "temurin" => {
             let os = if os == "macos" { "mac" } else { os };

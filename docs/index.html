@@ -101,7 +101,10 @@ next to JVM startup.</p>
 <p>If a project pins a version you don't have, the first invocation
 <strong>downloads it on demand</strong> (Volta-style) from the distro's official endpoint —
 never triggered by merely <code>cd</code>-ing around, safe under parallel builds, and
-disabled with <code>JOLTA_NO_AUTO_INSTALL=1</code>.</p>
+disabled with <code>JOLTA_NO_AUTO_INSTALL=1</code>. Restricted networks can set
+<code>JOLTA_DOWNLOAD_BASE</code> to serve JDKs from an internal mirror
+(<code>{base}/{vendor}/{major}/{os}-{arch}.{ext}</code>) instead of the vendor
+endpoints.</p>
 <p>Jolta also finds the JDKs you already have: Homebrew,
 <code>/Library/Java/JavaVirtualMachines</code>, SDKMAN, <code>/usr/lib/jvm</code>,
 Windows <code>Program Files</code>, and <code>JAVA_HOME_&lt;major&gt;_*</code> environment

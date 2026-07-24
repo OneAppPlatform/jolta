@@ -123,6 +123,12 @@ Auto-install never triggers from the cd hook (changing directories won't start a
 download), is safe under parallel builds (concurrent installs are serialized by a
 lock), and can be disabled with `JOLTA_NO_AUTO_INSTALL=1`.
 
+Restricted or offline networks: discovery of preinstalled JDKs is fully local, and
+`JOLTA_DOWNLOAD_BASE` points downloads at an internal mirror instead of the vendor
+endpoints. The mirror uses a flat layout — `{base}/{vendor}/{major}/{os}-{arch}.{ext}`
+with `macos|linux|windows`, `aarch64|x64`, and `tar.gz` (`zip` on Windows), e.g.
+`https://artifacts.corp/jdks/temurin/21/linux-x64.tar.gz`.
+
 ```sh
 jolta list          # everything jolta can see, with the active one starred
 jolta install 21           # explicitly download Temurin 21

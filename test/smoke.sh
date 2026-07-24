@@ -158,7 +158,27 @@ HOME="$imp" JOLTA_HOME="$imp/home" SHELL=/bin/zsh "$JOLTA_BIN" implode --yes >/d
 check "implode kept non-jolta zshrc lines" "keep me" "$(cat "$imp/.zshrc")"
 rm -rf "$imp"
 
-# 16. auto-install: pinning an uninstalled major downloads it (network, opt-in)
+# 16. JOLTA_DOWNLOAD_BASE mirror: install from a file:// mirror, fully offline
+mirror=$(mktemp -d)
+fake="$mirror/fake-jdk-99"
+mkdir -p "$fake/bin"
+printf 'JAVA_VERSION="99.0.0"\nIMPLEMENTOR="Eclipse Adoptium"\n' > "$fake/release"
+printf '#!/bin/sh\necho fake-java-99\n' > "$fake/bin/java" && chmod +x "$fake/bin/java"
+case "$(uname -s)/$(uname -m)" in
+  Darwin/arm64)  plat="macos-aarch64" ;;
+  Darwin/x86_64) plat="macos-x64" ;;
+  Linux/aarch64) plat="linux-aarch64" ;;
+  *)             plat="linux-x64" ;;
+esac
+mkdir -p "$mirror/temurin/99"
+tar -C "$mirror" -czf "$mirror/temurin/99/$plat.tar.gz" "$(basename "$fake")"
+out=$(JOLTA_DOWNLOAD_BASE="file://$mirror" JOLTA_NO_AUTO_INSTALL= jolta install 99 2>&1) || true
+check "mirror install succeeds" "installed temurin 99.0.0" "$out"
+check "mirror JDK resolvable" "^99	99.0.0	temurin	" "$(jolta jdks | grep '^99	' || true)"
+jolta uninstall temurin-99.0.0 >/dev/null 2>&1 || true
+rm -rf "$mirror"
+
+# 17. auto-install: pinning an uninstalled major downloads it (network, opt-in)
 if [ "${JOLTA_TEST_NETWORK:-}" = "1" ]; then
   want=25
   if printf '%s\n' "$majors" | grep -qx "$want"; then
