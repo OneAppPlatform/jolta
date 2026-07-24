@@ -79,6 +79,8 @@ fn main() {
                 paths::jolta_home().display()
             )),
         },
+        "update" | "outdated" => cmd_update(),
+        "upgrade" => cmd_upgrade(rest.first().map(String::as_str)),
         "list" | "ls" => cmd_list(),
         "jdks" => cmd_jdks(),
         "current" => cmd_current(),

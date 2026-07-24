@@ -175,7 +175,18 @@ tar -C "$mirror" -czf "$mirror/temurin/99/$plat.tar.gz" "$(basename "$fake")"
 out=$(JOLTA_DOWNLOAD_BASE="file://$mirror" JOLTA_NO_AUTO_INSTALL= jolta install 99 2>&1) || true
 check "mirror install succeeds" "installed temurin 99.0.0" "$out"
 check "mirror JDK resolvable" "^99	99.0.0	temurin	" "$(jolta jdks | grep '^99	' || true)"
-jolta uninstall temurin-99.0.0 >/dev/null 2>&1 || true
+
+# 16b. update/upgrade cycle: publish a point release to the mirror, upgrade, prune
+printf 'JAVA_VERSION="99.0.1"\nIMPLEMENTOR="Eclipse Adoptium"\n' > "$fake/release"
+tar -C "$mirror" -czf "$mirror/temurin/99/$plat.tar.gz" "$(basename "$fake")"
+out=$(JOLTA_DOWNLOAD_BASE="file://$mirror" jolta upgrade 99 2>&1) || true
+check "upgrade installs point release" "installed temurin 99.0.1" "$out"
+check "upgrade prunes superseded" "pruned temurin-99.0.0" "$out"
+check "resolution now newest" "^99	99.0.1	temurin	" "$(jolta jdks | grep '^99	' || true)"
+check "old build gone from jdks" "^0\$" "$(jolta jdks | grep -c '99.0.0' || true)"
+out=$(JOLTA_DOWNLOAD_BASE="file://$mirror" jolta update 2>&1) || true
+check "update lists managed jdk" "temurin@99" "$out"
+jolta uninstall temurin-99.0.1 >/dev/null 2>&1 || true
 rm -rf "$mirror"
 
 # 17. auto-install: pinning an uninstalled major downloads it (network, opt-in)

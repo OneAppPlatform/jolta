@@ -119,6 +119,23 @@ jolta install graalvm@25     # explicitly fetch a GraalVM JDK
 
 `jolta list` and `jolta jdks` show the distro of every installed JDK.
 
+## Keeping JDKs current
+
+Homebrew-style, for the JDKs jolta itself downloaded:
+
+```sh
+jolta update        # check for newer point releases (alias: jolta outdated)
+jolta upgrade       # upgrade all jolta-managed JDKs, pruning superseded builds
+jolta upgrade 21    # or just one (also corretto@21 etc.)
+```
+
+`update` learns the latest point release from the versioned filename in each
+vendor's redirect chain — no downloads. `upgrade` fetches the newer build,
+switches resolution to it (pins are majors, so nothing else changes), and
+removes the superseded install. JDKs from Homebrew/system packages are left to
+their own package managers — since resolution always picks the highest build of
+a major, a `brew upgrade`d JDK takes effect automatically.
+
 ## Where JDKs come from
 
 Jolta finds JDKs you already have (Homebrew, `/Library/Java/JavaVirtualMachines`,
@@ -150,6 +167,8 @@ jolta install corretto@21  # or another distro
 | `jolta pin <v>` | Write `.java-version` in the current directory |
 | `jolta default <v>` | Set the global fallback version |
 | `jolta install <spec>` | Download a JDK (`21`, `corretto@21`, `graalvm@25`) |
+| `jolta update` | Check jolta-managed JDKs for newer point releases |
+| `jolta upgrade [spec]` | Upgrade jolta-managed JDKs, pruning old builds |
 | `jolta jdks` | Machine-readable list: `major`/`version`/`distro`/`home` |
 | `jolta uninstall <name>` | Remove a jolta-managed JDK |
 | `jolta list` | List visible JDKs, star the active one |

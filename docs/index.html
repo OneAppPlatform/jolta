@@ -139,6 +139,12 @@ jolta install graalvm@25     # explicitly fetch a GraalVM JDK</code></pre>
       A bare <code>21</code> matches any distro.</li>
 </ul>
 
+<p>Point releases: <code>jolta update</code> checks jolta-managed JDKs against the
+vendors (via redirect filenames — no downloads) and <code>jolta upgrade</code>
+fetches newer builds and prunes superseded ones. Homebrew/system JDKs stay with
+their own package managers; resolution picks the highest build of a major, so
+their upgrades apply automatically.</p>
+
 <h2 id="java-home">JAVA_HOME, Maven &amp; Gradle</h2>
 <p>Two mechanisms keep <code>JAVA_HOME</code> correct:</p>
 <ol>
@@ -161,6 +167,8 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td><code>jolta pin &lt;spec&gt;</code></td><td>Write <code>.java-version</code> in the current directory</td></tr>
 <tr><td><code>jolta default &lt;spec&gt;</code></td><td>Set the global fallback version</td></tr>
 <tr><td><code>jolta install &lt;spec&gt;</code></td><td>Download a JDK (<code>21</code>, <code>corretto@21</code>, <code>graalvm@25</code>)</td></tr>
+<tr><td><code>jolta update</code></td><td>Check jolta-managed JDKs for newer point releases</td></tr>
+<tr><td><code>jolta upgrade [spec]</code></td><td>Upgrade jolta-managed JDKs, pruning old builds</td></tr>
 <tr><td><code>jolta uninstall &lt;name&gt;</code></td><td>Remove a jolta-managed JDK</td></tr>
 <tr><td><code>jolta list</code></td><td>List visible JDKs with distro, star the active one</td></tr>
 <tr><td><code>jolta jdks</code></td><td>Machine-readable list: major / version / distro / home</td></tr>

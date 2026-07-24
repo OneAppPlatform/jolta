@@ -6,15 +6,15 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::install::install_vendor_major;
+use crate::install::{install_vendor_major, latest_remote_version, prune_superseded};
 use crate::jdk::{
-    jdk_version, list_all, list_managed, list_system, major_of, parse_spec, system_default,
-    tool_bin, vendor_of, INSTALLABLE_VENDORS,
+    jdk_version, list_all, list_managed, list_system, major_of, numkey, parse_spec,
+    system_default, tool_bin, vendor_of, INSTALLABLE_VENDORS, KNOWN_VENDORS,
 };
 use crate::platform;
 use crate::paths::{home_dir, jolta_home, shims_dir, which};
 use crate::resolve::{clear_cache, read_pin, resolve, resolve_current};
-use crate::ui::{bad_mark, bold, cyan, die, dim, green, ok_mark, paint, warn_mark};
+use crate::ui::{bad_mark, bold, cyan, die, dim, green, ok_mark, paint, warn_mark, yellow};
 
 pub fn usage() {
     print!(
@@ -26,6 +26,8 @@ pub fn usage() {
   pin <spec>             Pin a Java version for this project (.java-version)
   default <spec>         Set the global fallback Java version
   install <spec>         Download a JDK (e.g. 21, corretto@21, graalvm@25)
+  update, outdated       Check jolta-managed JDKs for newer point releases
+  upgrade [spec]         Upgrade jolta-managed JDKs (all, or one: 21, corretto@21)
   uninstall <name>       Remove a jolta-managed JDK (see 'jolta list' for names)
   list, ls               List installed JDKs and where they come from
   jdks                   Machine-readable list: major<TAB>version<TAB>distro<TAB>home
@@ -353,6 +355,124 @@ pub fn cmd_install(spec: &str) {
         .unwrap_or_else(|| die(&format!("cannot parse version '{spec}' (try e.g. 21 or corretto@21)")));
     if install_vendor_major(vendor, major).is_err() {
         std::process::exit(1);
+    }
+}
+
+/// jolta-managed JDKs as (vendor, major, best installed full version),
+/// one entry per distro+major (highest build wins).
+fn managed_targets() -> Vec<(String, u32, String)> {
+    let mut best: Vec<(String, u32, String)> = Vec::new();
+    let jdks = jolta_home().join("jdks");
+    let Ok(entries) = fs::read_dir(&jdks) else { return best };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some((vendor, full)) = name.split_once('-') else { continue };
+        if !KNOWN_VENDORS.contains(&vendor) {
+            continue;
+        }
+        let Some(major) = major_of(full) else { continue };
+        match best.iter_mut().find(|(v, m, _)| v == vendor && *m == major) {
+            Some(slot) if numkey(full) > numkey(&slot.2) => slot.2 = full.to_string(),
+            Some(_) => {}
+            None => best.push((vendor.to_string(), major, full.to_string())),
+        }
+    }
+    best.sort();
+    best
+}
+
+pub fn cmd_update() {
+    let targets = managed_targets();
+    if targets.is_empty() {
+        println!(
+            "no jolta-managed JDKs to check {}",
+            dim("(system JDKs update through their own package managers, e.g. brew)")
+        );
+        return;
+    }
+    let mut outdated = 0;
+    for (vendor, major, installed) in &targets {
+        match latest_remote_version(vendor, *major) {
+            Some(latest) if numkey(&latest) > numkey(installed) => {
+                println!(
+                    "  {} {}@{}  {} -> {}",
+                    yellow("!"),
+                    cyan(vendor),
+                    major,
+                    installed,
+                    bold(&latest)
+                );
+                outdated += 1;
+            }
+            Some(_) => {
+                println!("  {} {}@{}  {} {}", ok_mark(), cyan(vendor), major, installed, dim("(up to date)"));
+            }
+            None => {
+                println!(
+                    "  ? {}@{}  {} {}",
+                    cyan(vendor),
+                    major,
+                    installed,
+                    dim("(latest unknown — mirror or non-redirecting vendor; 'jolta upgrade' will check by fetching)")
+                );
+            }
+        }
+    }
+    if outdated > 0 {
+        println!("\n{outdated} outdated — run {} to update", bold("jolta upgrade"));
+    }
+}
+
+pub fn cmd_upgrade(spec: Option<&str>) {
+    let managed = managed_targets();
+    let targets: Vec<(String, u32, String)> = match spec {
+        Some(s) => {
+            let (vendor, version) = parse_spec(s);
+            let vendor = vendor.unwrap_or("temurin");
+            let major = major_of(&version)
+                .unwrap_or_else(|| die(&format!("cannot parse '{s}' (try e.g. 21 or corretto@21)")));
+            match managed.into_iter().find(|(v, m, _)| v == vendor && *m == major) {
+                Some(t) => vec![t],
+                None => die(&format!(
+                    "{vendor}@{major} is not jolta-managed — 'jolta install {s}' to add it \
+                     (system JDKs upgrade through their own package managers)"
+                )),
+            }
+        }
+        None => managed,
+    };
+    if targets.is_empty() {
+        println!(
+            "nothing to upgrade {}",
+            dim("(no jolta-managed JDKs; system JDKs upgrade through their own package managers)")
+        );
+        return;
+    }
+    let mut upgraded = 0;
+    for (vendor, major, installed) in &targets {
+        if let Some(latest) = latest_remote_version(vendor, *major) {
+            if numkey(&latest) <= numkey(installed) {
+                println!("  {} {}@{}  {} {}", ok_mark(), cyan(vendor), major, installed, dim("(up to date)"));
+                continue;
+            }
+        }
+        // unknown or newer: fetch latest; install reports "already installed"
+        // if it lands on the same version we have
+        match install_vendor_major(vendor, *major) {
+            Ok(landed) => {
+                if numkey(&landed) > numkey(installed) {
+                    prune_superseded(vendor, *major, &landed);
+                    upgraded += 1;
+                }
+            }
+            Err(()) => eprintln!(
+                "{} upgrade of {vendor}@{major} failed; kept {installed}",
+                paint("33", "jolta: warning:", true)
+            ),
+        }
+    }
+    if upgraded > 0 {
+        println!("{} upgraded {upgraded} JDK(s)", ok_mark());
     }
 }
 

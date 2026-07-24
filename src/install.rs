@@ -48,7 +48,55 @@ fn vendor_url(vendor: &str, major: u32) -> String {
     }
 }
 
-pub fn install_vendor_major(vendor: &str, major: u32) -> Result<(), ()> {
+/// Latest available point release for a distro+major, learned from the
+/// versioned filename the vendor's "latest" URL redirects to — no download.
+/// None when undeterminable (mirrors, vendors that don't redirect).
+pub fn latest_remote_version(vendor: &str, major: u32) -> Option<String> {
+    if env::var("JOLTA_DOWNLOAD_BASE").is_ok() {
+        return None; // mirrors serve a stable path; nothing to learn from it
+    }
+    let url = vendor_url(vendor, major);
+    // Scan the redirect chain's Location headers: the versioned filename shows
+    // up in an intermediate hop (Temurin's final hop is an unversioned signed
+    // blob URL, so %{url_effective} is useless there).
+    let o = Command::new("curl").args(["-sIL"]).arg(&url).output().ok()?;
+    let headers = String::from_utf8_lossy(&o.stdout);
+    let needle = format!("{major}.");
+    for line in headers.lines() {
+        let lower = line.to_ascii_lowercase();
+        if !lower.starts_with("location") {
+            continue;
+        }
+        if let Some(start) = line.find(&needle) {
+            let version: String = line[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            let version = version.trim_end_matches('.').to_string();
+            if version.len() > needle.len() {
+                return Some(version);
+            }
+        }
+    }
+    None
+}
+
+/// Remove jolta-managed installs of this distro+major other than `keep`.
+pub fn prune_superseded(vendor: &str, major: u32, keep: &str) {
+    let jdks = jolta_home().join("jdks");
+    let Ok(entries) = fs::read_dir(&jdks) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(full) = name.strip_prefix(&format!("{vendor}-")) else { continue };
+        if full != keep && crate::jdk::major_of(full) == Some(major) {
+            if fs::remove_dir_all(entry.path()).is_ok() {
+                println!("  {} pruned {name}", ok_mark());
+            }
+        }
+    }
+}
+
+pub fn install_vendor_major(vendor: &str, major: u32) -> Result<String, ()> {
     if !matches!(env::consts::OS, "macos" | "linux" | "windows") {
         die(&format!("unsupported OS: {}", env::consts::OS));
     }
@@ -78,9 +126,9 @@ pub fn install_vendor_major(vendor: &str, major: u32) -> Result<(), ()> {
                 std::thread::sleep(Duration::from_secs(2));
                 waited += 2;
             }
-            if resolve(&format!("{vendor}-{major}")).is_some() {
+            if let Some(h) = resolve(&format!("{vendor}-{major}")) {
                 println!("{} {vendor} {major} installed by the other process", ok_mark());
-                return Ok(());
+                return Ok(jdk_version(&h).unwrap_or_default());
             }
             if lock.is_dir() {
                 die(&format!("timed out waiting for concurrent install (remove {} if stale)", lock.display()));
@@ -145,5 +193,5 @@ pub fn install_vendor_major(vendor: &str, major: u32) -> Result<(), ()> {
         );
     }
     cmd_reshim();
-    Ok(())
+    Ok(full)
 }
