@@ -39,6 +39,10 @@ th { color: var(--muted); font-weight: 600; }
 .pill { display: inline-block; background: var(--code-bg); border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; font-size: .85rem; margin: 2px; }
 footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(--muted); font-size: .9rem; text-align: center; }
 .demo { color: var(--muted); }
+td.y { color: #2e9e5b; font-weight: 600; }
+td.n { color: #c05555; }
+td.m { color: var(--accent2); }
+.cmp td:first-child { white-space: nowrap; }
 .demo b { color: var(--accent2); font-weight: 600; }
 </style>
 </head>
@@ -67,6 +71,7 @@ footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(-
   <a href="#distros">Distros</a>
   <a href="#java-home">JAVA_HOME &amp; builds</a>
   <a href="#commands">Commands</a>
+  <a href="#compared">Compared</a>
   <a href="#uninstall">Uninstall</a>
 </div></nav>
 
@@ -187,6 +192,47 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td><code>jolta doctor</code></td><td>Diagnose PATH / shim / <code>JAVA_HOME</code> problems</td></tr>
 <tr><td><code>jolta implode</code></td><td>Uninstall jolta completely</td></tr>
 </table>
+
+<h2 id="compared">How jolta compares</h2>
+<p>An honest table, current as of July 2026 — corrections
+<a href="https://github.com/OneAppPlatform/jolta/issues">welcome</a>.</p>
+<table class="cmp">
+<tr><th></th><th>jolta</th><th>mise</th><th>SDKMAN</th><th>jenv</th><th>asdf</th></tr>
+<tr><td><code>.java-version</code> honored by default</td>
+  <td class="y">✓</td><td class="m">opt-in</td><td class="n">✗</td><td class="y">✓</td><td class="m">opt-in</td></tr>
+<tr><td><code>.sdkmanrc</code> honored</td>
+  <td class="y">✓ vendor-mapped</td><td class="m">opt-in</td><td class="m">opt-in (auto-env)</td><td class="n">✗</td><td class="n">✗</td></tr>
+<tr><td><code>JAVA_HOME</code> set automatically</td>
+  <td class="y">✓ shims + cd hook</td><td class="m">activate mode only</td><td class="y">✓</td><td class="m">plugin</td><td class="m">plugin script</td></tr>
+<tr><td>Downloads JDKs</td>
+  <td class="y">✓ 5 distros</td><td class="y">✓ (no GraalVM)</td><td class="y">✓ many</td><td class="n">✗</td><td class="y">✓ many</td></tr>
+<tr><td>Auto-install on first <code>java</code> run</td>
+  <td class="y">✓</td><td class="m">partial</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
+<tr><td>Exact point-release pinning</td>
+  <td class="y">✓ strict</td><td class="y">✓</td><td class="y">✓</td><td class="m">if installed</td><td class="y">✓</td></tr>
+<tr><td>GraalVM</td>
+  <td class="y">✓</td><td class="n">✗</td><td class="y">✓</td><td class="m">manual</td><td class="y">✓</td></tr>
+<tr><td>Finds JDKs you already have (brew, system)</td>
+  <td class="y">✓ automatic</td><td class="n">✗</td><td class="n">✗</td><td class="m">manual add</td><td class="n">✗</td></tr>
+<tr><td>Point-release upgrades with cleanup</td>
+  <td class="y">✓ upgrade + prune</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="m">manual</td></tr>
+<tr><td>Remote catalog browsing</td>
+  <td class="y">✓ cached, 16&nbsp;ms warm</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td></tr>
+<tr><td>Native Windows</td>
+  <td class="y">✓</td><td class="y">✓</td><td class="n">WSL</td><td class="n">✗</td><td class="n">✗</td></tr>
+<tr><td>Corporate mirror support</td>
+  <td class="y">✓ one env var</td><td class="m">URL regex</td><td class="n">✗</td><td class="n">n/a</td><td class="m">per-plugin</td></tr>
+<tr><td>Also manages Maven/Gradle/other tools</td>
+  <td class="n">✗ Java only, by design</td><td class="y">✓ polyglot</td><td class="y">✓ JVM ecosystem</td><td class="n">✗</td><td class="y">✓ polyglot</td></tr>
+<tr><td>Zero config files of its own</td>
+  <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="y">✓</td><td class="n">✗</td></tr>
+<tr><td>Battle-tested since</td>
+  <td class="m">2026 (yes, yesterday)</td><td class="y">2023</td><td class="y">2012</td><td class="y">2011</td><td class="y">2014</td></tr>
+</table>
+<p class="muted">Fair summary: if Java is one of five languages you juggle, mise is
+excellent. If Java is the job, jolta does the whole job by default — nothing to
+enable, nothing to configure, and a <code>.java-version</code> is all your repo
+needs.</p>
 
 <h2 id="uninstall">Uninstall</h2>
 <pre><code>jolta implode</code></pre>
