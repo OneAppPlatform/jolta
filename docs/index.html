@@ -106,7 +106,7 @@ next to JVM startup.</p>
 never triggered by merely <code>cd</code>-ing around, safe under parallel builds, and
 disabled with <code>JOLTA_NO_AUTO_INSTALL=1</code>. Restricted networks can set
 <code>JOLTA_DOWNLOAD_BASE</code> to serve JDKs from an internal mirror
-(<code>{base}/{vendor}/{major}/{os}-{arch}.{ext}</code>) instead of the vendor
+(<code>{base}/{vendor}/{version}/{os}-{arch}.{ext}</code>) instead of the vendor
 endpoints.</p>
 <p>Jolta also finds the JDKs you already have: Homebrew,
 <code>/Library/Java/JavaVirtualMachines</code>, SDKMAN, <code>/usr/lib/jvm</code>,
@@ -135,7 +135,7 @@ jolta install graalvm@25     # explicitly fetch a GraalVM JDK</code></pre>
 <ul>
   <li><strong>Downloadable:</strong> <code>temurin</code> (default), <code>corretto</code>,
       <code>graalvm</code>, <code>oracle</code>, <code>zulu</code>.</li>
-  <li><strong>Recognized when matching:</strong> those four plus <code>zulu</code> and
+  <li><strong>Recognized when matching:</strong> those five plus
       <code>openjdk</code> (Homebrew builds).</li>
   <li>A distro-qualified pin is strict — <code>corretto-21</code> picks an installed
       Corretto 21 over a Homebrew OpenJDK 21, and auto-installs Corretto if missing.
