@@ -20,14 +20,28 @@ directory to find the nearest `.java-version`, resolves an installed JDK for it,
 
 ## Install
 
+Requirements: macOS or Linux, zsh or bash, and `curl` (only for JDK auto-install).
+
 ```sh
 git clone https://github.com/dave-oneapp/jolta.git && cd jolta
 ./bin/jolta setup
 ```
 
-`setup` creates `~/.jolta`, generates shims for every JDK it can find, and appends a
-small marked block to your shell profile putting `~/.jolta/shims` on your `PATH`.
-Open a new shell and run `jolta doctor` to verify.
+`setup` installs a self-contained copy of jolta into `~/.jolta` (you can delete the
+clone afterward), generates shims for every JDK it can find, and appends two small
+marked blocks to your shell profile: one putting `~/.jolta/shims` on your `PATH`, one
+enabling the `JAVA_HOME` cd hook. Open a new shell and run `jolta doctor` to verify.
+Re-running `./bin/jolta setup` from a newer checkout upgrades the installed copy.
+
+## Uninstall
+
+```sh
+jolta implode
+```
+
+Removes `~/.jolta` (including any downloaded JDKs) and the jolta lines from your
+shell profile, after a confirmation prompt. Your `.java-version` files and any
+Homebrew/system JDKs are untouched.
 
 ## Pinning
 
@@ -80,6 +94,7 @@ jolta install 21    # explicitly download Temurin 21 from Adoptium
 | `jolta hook [zsh\|bash]` | Print the cd hook that keeps `JAVA_HOME` in sync |
 | `jolta reshim` | Regenerate shims after installing JDKs outside jolta |
 | `jolta doctor` | Diagnose PATH/shim/`JAVA_HOME` problems |
+| `jolta implode` | Uninstall jolta completely |
 
 ## JAVA_HOME, Maven & Gradle
 

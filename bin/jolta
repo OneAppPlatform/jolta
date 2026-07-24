@@ -38,6 +38,7 @@ Usage: jolta <command> [args]
   hook [zsh|bash]      Print shell hook code that keeps JAVA_HOME in sync on cd
   reshim               Regenerate shims from installed JDKs
   doctor               Diagnose common setup problems
+  implode              Uninstall jolta completely (~/.jolta + shell profile lines)
   version              Print jolta's version
 
 Version resolution order:
@@ -76,9 +77,18 @@ profile_file() {
 
 cmd_setup() {
   _home=$(jolta_home)
-  mkdir -p "$_home/bin" "$_home/jdks" "$_home/cache"
-  ln -sf "$JOLTA_INSTALL_DIR/bin/jolta" "$_home/bin/jolta"
-  cmd_reshim
+  mkdir -p "$_home/bin" "$_home/libexec" "$_home/jdks" "$_home/cache"
+  if [ "$JOLTA_INSTALL_DIR" != "$_home" ]; then
+    # Install a self-contained copy so the checkout can be moved or deleted
+    rm -f "$_home/bin/jolta"   # may be a symlink from an older setup
+    cp "$JOLTA_INSTALL_DIR/bin/jolta" "$_home/bin/jolta"
+    cp "$JOLTA_INSTALL_DIR/libexec/jolta-core.sh" "$JOLTA_INSTALL_DIR/libexec/jolta-shim" "$_home/libexec/"
+    chmod +x "$_home/bin/jolta" "$_home/libexec/jolta-shim"
+    printf 'jolta: installed to %s (this checkout is no longer needed at runtime)\n' "$_home"
+    "$_home/bin/jolta" reshim
+  else
+    cmd_reshim
+  fi
 
   _profile=$(profile_file)
   _shellname=$(basename "${SHELL:-/bin/zsh}")
@@ -306,6 +316,26 @@ cmd_uninstall() {
   printf 'jolta: removed %s\n' "$_dest"
 }
 
+cmd_implode() {
+  _home=$(jolta_home)
+  _profile=$(profile_file)
+  if [ "${1:-}" != "--yes" ]; then
+    printf 'This removes %s (including downloaded JDKs) and the jolta lines from %s.\n' "$_home" "$_profile"
+    printf 'Type "yes" to continue: '
+    read -r _answer
+    [ "$_answer" = "yes" ] || jolta_die "aborted"
+  fi
+  if [ -f "$_profile" ]; then
+    _tmp="$_profile.jolta-implode.$$"
+    sed -e '/# >>> jolta hook/,/# <<< jolta hook <<</d' \
+        -e '/# >>> jolta >>>/,/# <<< jolta <<</d' "$_profile" > "$_tmp"
+    mv "$_tmp" "$_profile"
+    printf 'jolta: removed jolta lines from %s\n' "$_profile"
+  fi
+  rm -rf "$_home"
+  printf 'jolta: removed %s — open a new shell to finish. So long!\n' "$_home"
+}
+
 cmd_doctor() {
   _ok=0
   _home=$(jolta_home)
@@ -377,6 +407,7 @@ case $cmd in
   home)           cmd_home "$@" ;;
   hook)           cmd_hook "$@" ;;
   reshim)         cmd_reshim "$@" ;;
+  implode)        cmd_implode "$@" ;;
   doctor)         cmd_doctor "$@" ;;
   version|-v|--version) printf 'jolta %s\n' "$JOLTA_VERSION_STRING" ;;
   help|-h|--help) usage ;;
