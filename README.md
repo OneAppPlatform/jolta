@@ -28,7 +28,7 @@ directory to find the nearest `.java-version`, resolves an installed JDK for it,
 ## Install
 
 Requirements: macOS, Linux, or Windows; `curl` (for JDK auto-install — built into
-Windows 10+); and a Rust toolchain to build (until prebuilt binaries are published).
+Windows 10+); plus a Rust toolchain only if no prebuilt binary exists for your platform (the installer prefers release binaries).
 
 One-liner (no clone left behind — fetches a tarball to a temp dir, builds,
 installs into `~/.jolta`, and cleans up):
@@ -52,7 +52,9 @@ marked blocks to your shell profile: one putting `~/.jolta/shims` on your `PATH`
 enabling the `JAVA_HOME` cd hook. Open a new shell and run `jolta doctor` to verify.
 Re-running setup from a newer build upgrades the installed copy.
 
-**Windows:** build with `cargo build --release`, run `.\target\release\jolta.exe setup`,
+**Windows:** download `jolta-x86_64-pc-windows-msvc.zip` from the
+[releases page](https://github.com/dave-oneapp/jolta/releases), unzip, and run
+`.\jolta.exe setup` (or build from source with `cargo build --release`),
 then follow the two printed steps: add the shims and bin directories to your user
 `PATH`, and add `jolta hook powershell | Out-String | Invoke-Expression` to your
 PowerShell `$PROFILE` for the `JAVA_HOME` hook. Shims are hard links (no Developer
