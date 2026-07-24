@@ -44,6 +44,18 @@ fn run_shim(tool: &str, args: Vec<String>) -> ! {
 }
 
 fn main() {
+    // Rust ignores SIGPIPE by default, turning `jolta list | head` into a
+    // "failed printing to stdout" panic. Restore normal Unix behavior: die
+    // silently when the read end of a pipe goes away.
+    unsafe {
+        extern "C" {
+            fn signal(signum: i32, handler: usize) -> usize;
+        }
+        const SIGPIPE: i32 = 13;
+        const SIG_DFL: usize = 0;
+        signal(SIGPIPE, SIG_DFL);
+    }
+
     let mut args: Vec<String> = env::args().collect();
     let invoked = Path::new(&args[0])
         .file_name()
