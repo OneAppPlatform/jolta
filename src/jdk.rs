@@ -53,6 +53,16 @@ pub fn numkey(version: &str) -> u64 {
     a * 1_000_000 + b * 1_000 + c
 }
 
+/// Path to a tool inside a JDK home (`.exe`-suffixed on Windows).
+pub fn tool_bin(home: &Path, tool: &str) -> PathBuf {
+    home.join("bin").join(format!("{tool}{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Does this home actually contain a runnable java?
+pub fn has_java(home: &Path) -> bool {
+    tool_bin(home, "java").is_file()
+}
+
 /// Full JAVA_VERSION from a JDK home's release file.
 pub fn jdk_version(home: &Path) -> Option<String> {
     let text = fs::read_to_string(home.join("release")).ok()?;
@@ -155,16 +165,34 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
             }
         }
     }
-    for base in [
+    let mut bases = vec![
         PathBuf::from("/usr/lib/jvm"),
         home_dir().join(".sdkman/candidates/java"),
-    ] {
+    ];
+    // Windows installers drop JDKs under Program Files vendor directories
+    for pf_var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Ok(pf) = std::env::var(pf_var) {
+            for sub in ["Java", "Eclipse Adoptium", "Amazon Corretto", "Microsoft", "Zulu"] {
+                bases.push(PathBuf::from(&pf).join(sub));
+            }
+        }
+    }
+    for base in bases {
         let Ok(entries) = fs::read_dir(&base) else { continue };
         for entry in entries.flatten() {
             let dir = entry.path();
             if !dir.is_dir() || dir.file_name().is_some_and(|n| n == "current") {
                 continue;
             }
+            if let Some(v) = jdk_version(&dir) {
+                out.push((v, dir));
+            }
+        }
+    }
+    // CI images (and some setups) export JAVA_HOME_<major>_<arch>=<home>
+    for (key, value) in std::env::vars() {
+        if key.starts_with("JAVA_HOME_") {
+            let dir = PathBuf::from(&value);
             if let Some(v) = jdk_version(&dir) {
                 out.push((v, dir));
             }
@@ -179,16 +207,23 @@ pub fn list_all() -> Vec<(String, PathBuf)> {
     all
 }
 
-/// System default JDK home, used when nothing is pinned and no jolta default set.
+/// System default JDK home, used when nothing is pinned and no jolta default
+/// set: macOS asks java_home; elsewhere fall back to the newest JDK found.
 pub fn system_default() -> Option<PathBuf> {
-    let o = Command::new("/usr/libexec/java_home").output().ok()?;
-    if !o.status.success() {
+    if Path::new("/usr/libexec/java_home").exists() {
+        if let Ok(o) = Command::new("/usr/libexec/java_home").output() {
+            if o.status.success() {
+                let home = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
+                if !home.as_os_str().is_empty() {
+                    return Some(home);
+                }
+            }
+        }
         return None;
     }
-    let home = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
-    if home.as_os_str().is_empty() {
-        None
-    } else {
-        Some(home)
-    }
+    list_all()
+        .into_iter()
+        .filter(|(_, h)| has_java(h))
+        .max_by_key(|(v, _)| numkey(v))
+        .map(|(_, h)| h)
 }

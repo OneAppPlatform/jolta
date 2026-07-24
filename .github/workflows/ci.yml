@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release
+      - name: Conformance suite (unix)
+        if: runner.os != 'Windows'
+        # Offline checks only; runners ship multiple JDK majors, which is all
+        # the suite needs. JOLTA_TEST_NETWORK=1 downloads are exercised locally.
+        run: ./test/smoke.sh
+      - name: Conformance suite (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./test/smoke.ps1

@@ -7,6 +7,7 @@
 //! on main; test/smoke.sh is the conformance suite.
 
 mod commands;
+mod platform;
 mod download;
 mod install;
 mod jdk;
@@ -15,7 +16,6 @@ mod resolve;
 mod ui;
 
 use std::env;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{exit, Command};
 
@@ -28,7 +28,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Shim mode: resolve the pinned JDK and exec the real `tool` from it.
 fn run_shim(tool: &str, args: Vec<String>) -> ! {
     let r = resolve_current(true);
-    let bin = r.home.join("bin").join(tool);
+    let bin = jdk::tool_bin(&r.home, tool);
     if !bin.is_file() {
         die(&format!(
             "'{tool}' is not provided by the resolved JDK ({})\n  version was selected by: {}",
@@ -36,29 +36,18 @@ fn run_shim(tool: &str, args: Vec<String>) -> ! {
             r.source
         ));
     }
-    let err = Command::new(&bin)
-        .args(&args)
-        .env("JAVA_HOME", &r.home)
-        .exec();
-    die(&format!("failed to exec {}: {err}", bin.display()));
+    let mut cmd = Command::new(&bin);
+    cmd.args(&args).env("JAVA_HOME", &r.home);
+    platform::exec_replace(cmd);
 }
 
 fn main() {
-    // Rust ignores SIGPIPE by default, turning `jolta list | head` into a
-    // "failed printing to stdout" panic. Restore normal Unix behavior: die
-    // silently when the read end of a pipe goes away.
-    unsafe {
-        extern "C" {
-            fn signal(signum: i32, handler: usize) -> usize;
-        }
-        const SIGPIPE: i32 = 13;
-        const SIG_DFL: usize = 0;
-        signal(SIGPIPE, SIG_DFL);
-    }
+    platform::init();
 
     let mut args: Vec<String> = env::args().collect();
+    // file_stem so "java.exe" dispatches as "java" on Windows
     let invoked = Path::new(&args[0])
-        .file_name()
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("jolta")
         .to_string();

@@ -3,16 +3,15 @@
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, Write};
-use std::os::unix::fs::{symlink, PermissionsExt};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::install::install_vendor_major;
 use crate::jdk::{
     jdk_version, list_all, list_managed, list_system, major_of, parse_spec, system_default,
-    vendor_of, INSTALLABLE_VENDORS,
+    tool_bin, vendor_of, INSTALLABLE_VENDORS,
 };
+use crate::platform;
 use crate::paths::{home_dir, jolta_home, shims_dir, which};
 use crate::resolve::{clear_cache, read_pin, resolve, resolve_current};
 use crate::ui::{bad_mark, bold, cyan, die, dim, green, ok_mark, paint, warn_mark};
@@ -60,11 +59,11 @@ Version resolution order:
 pub fn cmd_reshim() {
     let shims = shims_dir();
     let _ = fs::create_dir_all(&shims);
+    // The shims dir is wholly jolta-owned: clear every entry (Windows shims
+    // can be hard links or copies, not just symlinks)
     if let Ok(entries) = fs::read_dir(&shims) {
         for entry in entries.flatten() {
-            if entry.path().symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
-                let _ = fs::remove_file(entry.path());
-            }
+            let _ = fs::remove_file(entry.path());
         }
     }
     let me = env::current_exe().unwrap_or_else(|_| die("cannot locate the jolta binary"));
@@ -76,11 +75,11 @@ pub fn cmd_reshim() {
         let Ok(entries) = fs::read_dir(home.join("bin")) else { continue };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name == "jolta" {
+            if name.to_string_lossy().starts_with("jolta") || !platform::is_shimmable(&entry.path()) {
                 continue;
             }
             let link = shims.join(&name);
-            if !link.exists() && symlink(&me, &link).is_ok() {
+            if !link.exists() && platform::make_shim(&me, &link) {
                 count += 1;
             }
         }
@@ -113,12 +112,16 @@ pub fn cmd_setup() {
         let _ = fs::create_dir_all(home.join(sub));
     }
     let me = env::current_exe().unwrap_or_else(|_| die("cannot locate the jolta binary"));
-    let installed = home.join("bin/jolta");
+    let installed = home.join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
     if me != installed {
         // Install a self-contained copy so the build/checkout can be deleted
         let _ = fs::remove_file(&installed);
         fs::copy(&me, &installed).unwrap_or_else(|e| die(&format!("cannot install to {}: {e}", installed.display())));
-        let _ = fs::set_permissions(&installed, fs::Permissions::from_mode(0o755));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&installed, fs::Permissions::from_mode(0o755));
+        }
         println!(
             "{} installed to {} {}",
             ok_mark(),
@@ -134,6 +137,17 @@ pub fn cmd_setup() {
         cmd_reshim();
     }
 
+    #[cfg(windows)]
+    {
+        println!("{} add these to your user PATH (Settings > Environment Variables):", warn_mark());
+        println!("    {}", shims_dir().display());
+        println!("    {}", home.join("bin").display());
+        println!("{} then add this line to your PowerShell $PROFILE for the JAVA_HOME hook:", warn_mark());
+        println!("    jolta hook powershell | Out-String | Invoke-Expression");
+        println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
+        return;
+    }
+    #[allow(unreachable_code)]
     let profile = profile_file();
     let existing = fs::read_to_string(&profile).unwrap_or_default();
     let mut additions = String::new();
@@ -287,7 +301,7 @@ pub fn cmd_current() {
 
 pub fn cmd_which(tool: &str) {
     let r = resolve_current(false);
-    let bin = r.home.join("bin").join(tool);
+    let bin = tool_bin(&r.home, tool);
     if !bin.is_file() {
         die(&format!("'{tool}' not found in {}", r.home.display()));
     }
@@ -296,17 +310,14 @@ pub fn cmd_which(tool: &str) {
 
 pub fn cmd_exec(argv: &[String]) -> ! {
     let r = resolve_current(true);
-    let path = format!(
-        "{}/bin:{}",
-        r.home.display(),
-        env::var("PATH").unwrap_or_default()
-    );
-    let err = Command::new(&argv[0])
-        .args(&argv[1..])
-        .env("JAVA_HOME", &r.home)
-        .env("PATH", path)
-        .exec();
-    die(&format!("failed to exec {}: {err}", argv[0]));
+    let mut dirs = vec![r.home.join("bin")];
+    if let Some(old) = env::var_os("PATH") {
+        dirs.extend(env::split_paths(&old));
+    }
+    let path = env::join_paths(dirs).unwrap_or_else(|e| die(&format!("bad PATH: {e}")));
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..]).env("JAVA_HOME", &r.home).env("PATH", path);
+    platform::exec_replace(cmd);
 }
 
 pub fn cmd_env() {
@@ -328,7 +339,10 @@ pub fn cmd_hook(shell: &str) {
         "bash" => print!(
             "_jolta_update_java_home() {{\n  if [ \"${{_JOLTA_LAST_PWD:-}}\" = \"$PWD\" ]; then return; fi\n  _JOLTA_LAST_PWD=$PWD\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\ncase \";$PROMPT_COMMAND;\" in\n  *\";_jolta_update_java_home;\"*) ;;\n  *) PROMPT_COMMAND=\"_jolta_update_java_home${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\nesac\n_jolta_update_java_home\n"
         ),
-        other => die(&format!("no hook available for shell '{other}' (zsh and bash are supported)")),
+        "powershell" | "pwsh" => print!(
+            "function global:__jolta_update_java_home {{\n  $jh = & jolta home 2>$null\n  if ($LASTEXITCODE -eq 0 -and $jh) {{ $env:JAVA_HOME = \"$jh\" }}\n  else {{ Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue }}\n}}\n$global:__jolta_prev_prompt = $function:prompt\nfunction global:prompt {{ __jolta_update_java_home; & $global:__jolta_prev_prompt }}\n__jolta_update_java_home\n"
+        ),
+        other => die(&format!("no hook available for shell '{other}' (zsh, bash, and powershell are supported)")),
     }
 }
 
@@ -379,6 +393,9 @@ pub fn cmd_implode(args: &[String]) {
             die("aborted");
         }
     }
+    #[cfg(windows)]
+    let _ = &profile;
+    #[cfg(unix)]
     if let Ok(text) = fs::read_to_string(&profile) {
         let mut out = String::new();
         let mut skipping = false;
@@ -422,9 +439,10 @@ pub fn cmd_doctor() -> i32 {
         rc = 1;
     }
 
-    let path = env::var("PATH").unwrap_or_default();
-    let shims = shims_dir().display().to_string();
-    if path.split(':').any(|d| d == shims) {
+    let on_path = env::var_os("PATH")
+        .map(|p| env::split_paths(&p).any(|d| d == shims_dir()))
+        .unwrap_or(false);
+    if on_path {
         println!("  PATH:          {} ok (shims dir is on PATH)", ok_mark());
     } else {
         println!("  PATH:          {} shims dir NOT on PATH — run \"jolta setup\" and open a new shell", bad_mark());

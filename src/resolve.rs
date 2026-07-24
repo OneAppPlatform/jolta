@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use crate::install::install_vendor_major;
 use crate::jdk::{
-    list_all, major_of, numkey, parse_spec, system_default, vendor_of, INSTALLABLE_VENDORS,
+    has_java, list_all, major_of, numkey, parse_spec, system_default, vendor_of,
+    INSTALLABLE_VENDORS,
 };
 use crate::paths::jolta_home;
 use crate::ui::{die, paint};
@@ -63,13 +64,13 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
     let cache = cache_path(spec);
     if let Ok(cached) = fs::read_to_string(&cache) {
         let home = PathBuf::from(cached.trim());
-        if home.join("bin/java").is_file() {
+        if has_java(&home) {
             return Some(home);
         }
         let _ = fs::remove_file(&cache);
     }
     let home = best_match(&list_all(), vendor, major, &version)?;
-    if !home.join("bin/java").is_file() {
+    if !has_java(&home) {
         return None;
     }
     let _ = fs::create_dir_all(jolta_home().join("cache"));

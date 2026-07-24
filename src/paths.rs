@@ -1,12 +1,15 @@
 //! Well-known locations: the jolta home tree and PATH lookups.
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::ui::die;
 
 pub fn home_dir() -> PathBuf {
-    PathBuf::from(env::var("HOME").unwrap_or_else(|_| die("HOME is not set")))
+    env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| die("neither HOME nor USERPROFILE is set"))
 }
 
 pub fn jolta_home() -> PathBuf {
@@ -19,11 +22,11 @@ pub fn shims_dir() -> PathBuf {
     jolta_home().join("shims")
 }
 
-/// First executable named `name` on PATH.
+/// First executable named `name` on PATH (tries `name.exe` too on Windows).
 pub fn which(name: &str) -> Option<PathBuf> {
-    let path = env::var("PATH").ok()?;
-    for dir in path.split(':') {
-        let p = Path::new(dir).join(name);
+    let path = env::var_os("PATH")?;
+    for dir in env::split_paths(&path) {
+        let p = dir.join(format!("{name}{}", env::consts::EXE_SUFFIX));
         if p.is_file() {
             return Some(p);
         }

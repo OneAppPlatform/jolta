@@ -15,20 +15,25 @@ use crate::ui::{bold, cyan, die, dim, ok_mark, paint};
 
 /// Download URL for the latest GA build of a distro + major on this platform.
 fn vendor_url(vendor: &str, major: u32) -> String {
-    let os = if env::consts::OS == "macos" { "macos" } else { "linux" };
+    let os = match env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "linux",
+    };
     let arch = match env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x64",
         other => die(&format!("unsupported architecture: {other}")),
     };
+    let ext = if os == "windows" { "zip" } else { "tar.gz" };
     match vendor {
         "temurin" => {
             let os = if os == "macos" { "mac" } else { os };
             format!("https://api.adoptium.net/v3/binary/latest/{major}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse")
         }
-        "corretto" => format!("https://corretto.aws/downloads/latest/amazon-corretto-{major}-{arch}-{os}-jdk.tar.gz"),
-        "oracle" => format!("https://download.oracle.com/java/{major}/latest/jdk-{major}_{os}-{arch}_bin.tar.gz"),
-        "graalvm" => format!("https://download.oracle.com/graalvm/{major}/latest/graalvm-jdk-{major}_{os}-{arch}_bin.tar.gz"),
+        "corretto" => format!("https://corretto.aws/downloads/latest/amazon-corretto-{major}-{arch}-{os}-jdk.{ext}"),
+        "oracle" => format!("https://download.oracle.com/java/{major}/latest/jdk-{major}_{os}-{arch}_bin.{ext}"),
+        "graalvm" => format!("https://download.oracle.com/graalvm/{major}/latest/graalvm-jdk-{major}_{os}-{arch}_bin.{ext}"),
         other => die(&format!(
             "don't know how to download '{other}' builds (downloadable distros: {})",
             INSTALLABLE_VENDORS.join(", ")
@@ -37,7 +42,7 @@ fn vendor_url(vendor: &str, major: u32) -> String {
 }
 
 pub fn install_vendor_major(vendor: &str, major: u32) -> Result<(), ()> {
-    if env::consts::OS != "macos" && env::consts::OS != "linux" {
+    if !matches!(env::consts::OS, "macos" | "linux" | "windows") {
         die(&format!("unsupported OS: {}", env::consts::OS));
     }
 
@@ -85,7 +90,7 @@ pub fn install_vendor_major(vendor: &str, major: u32) -> Result<(), ()> {
     let _ = fs::create_dir_all(&tmp);
     let _tmp_guard = TmpGuard(tmp.clone());
 
-    let tarball = tmp.join("jdk.tar.gz");
+    let tarball = tmp.join("jdk.archive");
     let label = format!("{vendor}@{major}");
     if !download(&url, &tarball, &label) {
         eprintln!(
@@ -100,7 +105,7 @@ pub fn install_vendor_major(vendor: &str, major: u32) -> Result<(), ()> {
     let extract = tmp.join("x");
     let _ = fs::create_dir_all(&extract);
     let st = Command::new("tar")
-        .arg("-xzf")
+        .arg("-xf")
         .arg(&tarball)
         .arg("-C")
         .arg(&extract)
