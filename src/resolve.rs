@@ -252,15 +252,10 @@ fn first_spec_line(text: &str) -> Option<String> {
 }
 
 /// Find the nearest .java-version walking up from cwd; then default file.
+/// The project pin is authoritative — there is deliberately no env-var
+/// override (Volta-style): an exported override in some forgotten profile
+/// would silently beat every pin on the machine.
 pub fn read_pin() -> Pin {
-    if let Ok(v) = env::var("JOLTA_JAVA_VERSION") {
-        if !v.trim().is_empty() {
-            return Pin {
-                spec: Some(v.trim().to_string()),
-                source: "JOLTA_JAVA_VERSION environment variable".into(),
-            };
-        }
-    }
     let mut dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     loop {
         let f = dir.join(".java-version");

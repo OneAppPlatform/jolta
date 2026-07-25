@@ -61,9 +61,6 @@ pub fn usage() {
     println!("  21   21.0.4   1.8   corretto@21   graalvm-25   temurin@8");
     println!("Downloadable distros: {} (default temurin).", cyan(&INSTALLABLE_VENDORS.join(", ")));
     println!("Distro-less pins match any installed JDK of that major version.");
-    println!("\nVersion resolution order:");
-    println!("  JOLTA_JAVA_VERSION env var  >  nearest .java-version (walking up)  >");
-    println!("  jolta default  >  system default JDK");
 }
 
 /// Every tool a current JDK ships. Shimmed unconditionally — before any JDK
@@ -87,15 +84,24 @@ pub fn cmd_reshim() {
     // every rebuilt shim points into the shims dir and java becomes a
     // symlink loop.
     let me = fs::canonicalize(&me).unwrap_or(me);
+    let installed = jolta_home().join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
     // Belt and braces: a target inside the shims dir would recreate the loop
     // no matter how we got here — fall back to the installed copy.
     let me = if me.starts_with(&shims) {
-        let installed = jolta_home().join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
         if installed.is_file() {
-            installed
+            installed.clone()
         } else {
             die("cannot locate the real jolta binary (found only the shim) — run 'jolta setup' from the downloaded binary")
         }
+    } else {
+        me
+    };
+    // Shims must target the STABLE installed path, never its canonical
+    // target: for Homebrew installs bin/jolta is a symlink into brew's opt
+    // tree, and the canonical path is a versioned Cellar keg that the next
+    // `brew cleanup` deletes — every shim would dangle.
+    let me = if me != installed && fs::canonicalize(&installed).ok().as_deref() == Some(&me) {
+        installed
     } else {
         me
     };
@@ -183,6 +189,24 @@ pub fn shell_name() -> String {
     Path::new(&shell).file_name().and_then(|s| s.to_str()).unwrap_or("zsh").to_string()
 }
 
+/// If `me` (canonicalized) is a Homebrew keg binary — <prefix>/Cellar/jolta/
+/// <version>/bin/jolta — return brew's stable <prefix>/opt/jolta/bin/jolta
+/// path, verified to resolve back to `me`. Covers /opt/homebrew, /usr/local,
+/// and Linuxbrew prefixes alike, since the prefix is taken from the path.
+fn brew_opt_path(me: &Path) -> Option<PathBuf> {
+    if !cfg!(unix) {
+        return None;
+    }
+    let comps: Vec<&std::ffi::OsStr> = me.iter().collect();
+    let cellar = comps.iter().position(|c| c.to_str() == Some("Cellar"))?;
+    if comps.get(cellar + 1).and_then(|c| c.to_str()) != Some("jolta") {
+        return None;
+    }
+    let prefix: PathBuf = comps[..cellar].iter().collect();
+    let opt = prefix.join("opt").join("jolta").join("bin").join("jolta");
+    (fs::canonicalize(&opt).ok()? == *me).then_some(opt)
+}
+
 pub fn cmd_setup() {
     crate::ui::banner();
     let home = jolta_home();
@@ -193,20 +217,32 @@ pub fn cmd_setup() {
     let me = fs::canonicalize(&me).unwrap_or(me);
     let installed = home.join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
     if me != installed {
-        // Install a self-contained copy so the build/checkout can be deleted
         let _ = fs::remove_file(&installed);
-        fs::copy(&me, &installed).unwrap_or_else(|e| die(&format!("cannot install to {}: {e}", installed.display())));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&installed, fs::Permissions::from_mode(0o755));
+        if brew_opt_path(&me).is_some_and(|opt| platform::make_shim(&opt, &installed)) {
+            // A COPY of a brew binary goes stale on the next `brew upgrade` —
+            // and, sitting earlier on PATH, silently shadows the upgraded one.
+            // Linking through brew's stable opt path (repointed on every
+            // upgrade) makes upgrades flow through with no user action.
+            println!(
+                "{} linked to Homebrew {}",
+                ok_mark(),
+                dim("('brew upgrade jolta' now updates shims and all)")
+            );
+        } else {
+            // Install a self-contained copy so the build/checkout can be deleted
+            fs::copy(&me, &installed).unwrap_or_else(|e| die(&format!("cannot install to {}: {e}", installed.display())));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&installed, fs::Permissions::from_mode(0o755));
+            }
+            println!(
+                "{} installed to {} {}",
+                ok_mark(),
+                home.display(),
+                dim("(this checkout is no longer needed at runtime)")
+            );
         }
-        println!(
-            "{} installed to {} {}",
-            ok_mark(),
-            home.display(),
-            dim("(this checkout is no longer needed at runtime)")
-        );
         // reshim via the installed copy so shims point at it
         let st = Command::new(&installed).arg("reshim").status();
         if !st.is_ok_and(|s| s.success()) {
@@ -1175,6 +1211,23 @@ pub fn cmd_doctor() -> i32 {
         "  binary:        {}",
         env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "?".into())
     );
+
+    // Homebrew installs link bin/jolta through brew's opt path; a brew
+    // uninstall (without `jolta implode`) leaves the link dangling and every
+    // shim dead. Copies (curl/source installs) don't hit this and stay silent.
+    let installed = home.join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
+    if installed.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+        match fs::canonicalize(&installed) {
+            Ok(target) if target.is_file() => {
+                println!("  install link:  {} ok (bin/jolta -> {})", ok_mark(), target.display());
+            }
+            _ => {
+                println!("  install link:  {} DANGLING — bin/jolta points at a binary that is gone", bad_mark());
+                println!("                 (Homebrew uninstall or cleanup?) — reinstall jolta, then run \"jolta setup\"");
+                rc = 1;
+            }
+        }
+    }
 
     let shim_count = fs::read_dir(shims_dir())
         .map(|e| e.flatten().filter(|x| x.path().symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())).count())

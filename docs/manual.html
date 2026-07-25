@@ -157,9 +157,8 @@ jolta pin 21.0.4          # exact: this build or nothing</code></pre>
 <h3 id="cmd-current"><code>jolta current</code></h3>
 <p class="sig">What resolves here, and why.</p>
 <p>Prints the resolved full version, its distro, the source that selected it — the
-<code>JOLTA_JAVA_VERSION</code> variable, the path of the winning
-<code>.java-version</code>/<code>.sdkmanrc</code>, the global default, or the system
-JDK — and the home path. When the answer surprises you, the source line is the
+path of the winning <code>.java-version</code>/<code>.sdkmanrc</code>, the global
+default, or the system JDK — and the home path. When the answer surprises you, the source line is the
 explanation.</p>
 <pre><code>$ jolta current
 21.0.4 (temurin) (from /work/api/.java-version)
@@ -307,11 +306,14 @@ metadata.</p>
 
 <h3 id="cmd-setup"><code>jolta setup</code></h3>
 <p class="sig">One-time install: shims, profile, hook.</p>
-<p>Copies the binary into <code>$JOLTA_HOME/bin</code> (the downloaded file can be
-deleted afterwards), generates shims, and adds two marked blocks to your shell profile:
-the <code>PATH</code> prepend and the <code>JAVA_HOME</code> hook line. Idempotent —
-re-running from a newer binary upgrades the installed copy and never duplicates
-profile lines. On Windows it prints the two manual steps instead (user
+<p>Installs the binary into <code>$JOLTA_HOME/bin</code>, generates shims, and adds
+two marked blocks to your shell profile: the <code>PATH</code> prepend and the
+<code>JAVA_HOME</code> hook line. A Homebrew-installed jolta is <em>linked</em>
+through brew's stable <code>opt</code> path, so <code>brew upgrade jolta</code>
+updates the shims and everything else with no further action; any other binary
+(curl installer, source build) is <em>copied</em>, so the downloaded file or
+checkout can be deleted afterwards. Idempotent — re-running from a newer binary
+upgrades the install and never duplicates profile lines. On Windows it prints the two manual steps instead (user
 <code>PATH</code> additions and the PowerShell <code>$PROFILE</code> hook line).</p>
 
 <h3 id="cmd-hook"><code>jolta hook [zsh|bash|powershell]</code></h3>
@@ -342,7 +344,9 @@ outside jolta.</p>
 <p class="sig">Diagnose the whole chain; exit 0 means healthy.</p>
 <p>Checks that shims exist and win on <code>PATH</code> (naming any binary shadowing
 them), that <code>JAVA_HOME</code> matches what the current directory should resolve
-(catching stale exports that would mislead Maven/Gradle), that the resolved
+(catching stale exports that would mislead Maven/Gradle), that a Homebrew-linked
+install still points at a live binary (a <code>brew uninstall</code> without
+<code>jolta implode</code> leaves it dangling), that the resolved
 <code>java</code> matches your CPU architecture, that no <code>~/.mavenrc</code> sets
 <code>JAVA_HOME</code> behind jolta's back, mirror reachability and metadata when
 <code>JOLTA_DOWNLOAD_BASE</code> is set, and prints the pin and preferred vendor in
@@ -376,13 +380,15 @@ which jolta-installed JDKs will be deleted. System JDKs and your projects'
 <h2 id="precedence">Resolution precedence</h2>
 <p>Two ladders, evaluated in order. First, <em>which spec applies here</em>:</p>
 <ol>
-  <li><code>JOLTA_JAVA_VERSION</code> environment variable</li>
   <li>the nearest <code>.java-version</code> or <code>.sdkmanrc</code>, walking up
       from the current directory (<code>.java-version</code> wins inside one
       directory)</li>
   <li>the global <code>jolta default</code></li>
   <li>the system default JDK</li>
 </ol>
+<p>The project pin is authoritative — there is deliberately no environment-variable
+override: an export lingering in some forgotten profile would silently beat every
+pin on the machine.</p>
 <p>Then, <em>which installed JDK satisfies the spec</em>: an explicit distro in the
 spec filters hard; otherwise <strong>preferred-vendor GA &gt; any GA &gt;
 preferred-vendor EA &gt; any EA</strong>, highest build within the winning tier — the
@@ -395,8 +401,8 @@ alphabetically, so the answer is always deterministic.</p>
 commit it to your repo:</p>
 <pre><code>jolta pin 21        # this project uses Java 21
 jolta default 21    # global fallback when a project has no pin</code></pre>
-<p>Resolution order: <code>JOLTA_JAVA_VERSION</code> env var → nearest
-<code>.java-version</code> walking up → <code>jolta default</code> → system default JDK.
+<p>Resolution order: nearest <code>.java-version</code> walking up →
+<code>jolta default</code> → system default JDK.
 On a machine with no JDK at all, the first <code>java</code> run installs the latest
 LTS (Temurin) and sets it as your default.</p>
 <p>A major pin (<code>21</code>) matches the highest installed build of that major.
@@ -461,7 +467,6 @@ if it's on the machine, it resolves.</p>
 <table>
 <tr><th>Variable</th><th>Effect</th></tr>
 <tr><td><code>JOLTA_HOME</code></td><td>State root (default <code>~/.jolta</code>); a leading <code>~</code> is expanded</td></tr>
-<tr><td><code>JOLTA_JAVA_VERSION</code></td><td>Spec override beating every pin file — per-shell or per-command</td></tr>
 <tr><td><code>JOLTA_VENDOR</code></td><td>Preferred distro for vendorless specs (same as <code>jolta vendor</code>)</td></tr>
 <tr><td><code>JOLTA_NO_AUTO_INSTALL</code></td><td>Set to disable all on-demand downloads; missing JDKs become clean errors</td></tr>
 <tr><td><code>JOLTA_DOWNLOAD_BASE</code></td><td>Mirror base URL (<code>https://</code> or <code>file://</code>) replacing every vendor endpoint</td></tr>

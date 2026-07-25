@@ -12,7 +12,6 @@ New-Item -ItemType Directory -Force -Path "$work\home\shims", "$work\home\jdks" 
 $env:JOLTA_HOME = "$work\home"
 $env:JOLTA_NO_AUTO_INSTALL = "1"
 Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue
-Remove-Item Env:JOLTA_JAVA_VERSION -ErrorAction SilentlyContinue
 
 & $bin reshim | Out-Null
 $env:PATH = "$work\home\shims;" + (Split-Path $bin) + ";" + $env:PATH
@@ -46,9 +45,9 @@ New-Item -ItemType Directory -Path "$work\p2\sub\deeper" -Force | Out-Null
 Set-Location "$work\p2\sub\deeper"
 Check "walk-up from subdir" (VerPattern $m2) ((java -version 2>&1) -join " ")
 
-# 4. Env var override beats the file pin
+# 4. The project pin is authoritative: a stray JOLTA_JAVA_VERSION is inert
 $env:JOLTA_JAVA_VERSION = "$m1"
-Check "JOLTA_JAVA_VERSION override" (VerPattern $m1) ((java -version 2>&1) -join " ")
+Check "stray JOLTA_JAVA_VERSION is ignored" (VerPattern $m2) ((java -version 2>&1) -join " ")
 Remove-Item Env:JOLTA_JAVA_VERSION
 
 # 5. jolta home matches jolta which

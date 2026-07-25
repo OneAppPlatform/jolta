@@ -15,7 +15,7 @@ export JOLTA_HOME="$work/home"
 # Keep the default run offline and deterministic; JOLTA_TEST_NETWORK=1 enables
 # the auto-install download test at the end.
 export JOLTA_NO_AUTO_INSTALL=1
-unset JAVA_HOME JOLTA_JAVA_VERSION 2>/dev/null || true
+unset JAVA_HOME 2>/dev/null || true
 
 pass=0; fail=0
 check() {  # check <description> <expected-substring> <actual>
@@ -55,8 +55,8 @@ check "pin $m2 -> java -version" "\"$m2\.\|\"1\.$m2\.\|version \"$m2\"" "$(java 
 mkdir -p "$work/p2/sub/deeper" && cd "$work/p2/sub/deeper"
 check "walk-up from subdir" "\"$m2\.\|\"1\.$m2\.\|version \"$m2\"" "$(java -version 2>&1)"
 
-# 4. Env var override beats the file pin
-check "JOLTA_JAVA_VERSION override" "\"$m1\.\|\"1\.$m1\.\|version \"$m1\"" \
+# 4. The project pin is authoritative: a stray JOLTA_JAVA_VERSION is inert
+check "stray JOLTA_JAVA_VERSION is ignored" "\"$m2\.\|\"1\.$m2\.\|version \"$m2\"" \
   "$(JOLTA_JAVA_VERSION=$m1 java -version 2>&1)"
 
 # 5. jolta default used when nothing pinned

@@ -24,7 +24,7 @@ trap 'rm -rf "$work"' EXIT INT TERM
 
 export JOLTA_HOME="$work/home"
 export JOLTA_NO_AUTO_INSTALL=1
-unset JAVA_HOME JOLTA_JAVA_VERSION JOLTA_DOWNLOAD_BASE 2>/dev/null || true
+unset JAVA_HOME JOLTA_DOWNLOAD_BASE 2>/dev/null || true
 
 pass=0; fail=0; failed_names=''
 
@@ -186,16 +186,11 @@ printf 'v97\n' > .java-version
 jolta_rc jolta home
 check_rc "garbage spec fails" nonzero "$rc"
 
+# the project pin is authoritative: no env-var override exists (a stray
+# export in a forgotten profile must never silently beat every pin)
 printf '96\n' > .java-version
-check "JOLTA_JAVA_VERSION beats file pin" "temurin-97.0.1" \
+check "stray JOLTA_JAVA_VERSION is ignored, pin wins" "corretto-96.0.1" \
   "$(JOLTA_JAVA_VERSION=97 jolta home 2>/dev/null)"
-check "empty JOLTA_JAVA_VERSION is ignored" "corretto-96.0.1" \
-  "$(JOLTA_JAVA_VERSION= jolta home 2>/dev/null)"
-check "whitespace-padded JOLTA_JAVA_VERSION works" "temurin-97.0.1" \
-  "$(JOLTA_JAVA_VERSION=' 97 ' jolta home 2>/dev/null)"
-jolta_rc env JOLTA_JAVA_VERSION=bogus jolta home
-check_rc "invalid env override fails, no silent fallback to pin" nonzero "$rc"
-check "invalid env override error names the env var" "JOLTA_JAVA_VERSION" "$out"
 
 # =================================================================
 section "B. discovery & precedence (jenv/volta-inspired)"
@@ -655,8 +650,8 @@ section "H. robustness & shell integration (volta/jenv-inspired)"
 # =================================================================
 
 # version/help must work even with completely broken state
-jolta_rc env JOLTA_JAVA_VERSION=bogus jolta version
-check_rc "version works with bogus env override" 0 "$rc"
+jolta_rc jolta version
+check_rc "version works regardless of pin state" 0 "$rc"
 printf 'nonsense\n' > "$JOLTA_HOME/default"
 jolta_rc jolta help
 check_rc "help works with garbage default file" 0 "$rc"
@@ -1182,7 +1177,10 @@ no_stale_locks && ok "checksum failure leaves no stale lock" \
 # a JDK whose java can't exec must fail at install, not at first use (mise #9679)
 publish temurin 47 47.0.1
 stage="$work/stage-47.0.1"
-head -c 64 /dev/urandom > "$stage/jdk-root/bin/java"
+# NUL bytes make every shell refuse it ("cannot execute binary file") —
+# random bytes are a flake: a leading '#' (whole file one comment) or ':'
+# (the true builtin) lets macOS's sh-fallback exec exit 0 and the probe pass
+printf '\000not a JVM, not a script\000' > "$stage/jdk-root/bin/java"
 chmod +x "$stage/jdk-root/bin/java"
 tar -C "$stage" -czf "$mirror/temurin/47/$plat.tar.gz" jdk-root
 jolta_rc env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 47
@@ -1472,6 +1470,50 @@ check "doctor reports mirror metadata + LTS" "metadata found, LTS 43" "$out"
 mkdir -p "$work/mirror3"
 out=$(cd "$work/d" && env JOLTA_DOWNLOAD_BASE="file://$work/mirror3" jolta doctor 2>&1)
 check "doctor warns on a metadata-less mirror" "no metadata" "$out"
+
+# =================================================================
+section "P. Homebrew install linkage (brew upgrade must propagate)"
+# =================================================================
+# setup from a brew Cellar binary must LINK through the stable opt path, not
+# copy — a copy sits earlier on PATH than brew's bin and silently shadows
+# every future `brew upgrade`.
+
+brew="$work/brew"
+mkdir -p "$brew/Cellar/jolta/9.9.9/bin" "$brew/opt" "$work/brewhome"
+cp "$JOLTA_BIN" "$brew/Cellar/jolta/9.9.9/bin/jolta"
+ln -s "../Cellar/jolta/9.9.9" "$brew/opt/jolta"
+jolta_rc env HOME="$work/brewhome" SHELL=/bin/sh "$brew/opt/jolta/bin/jolta" setup
+check_rc "setup from a brew keg succeeds" 0 "$rc"
+check "setup detects the brew install" "linked to Homebrew" "$out"
+[ -L "$JOLTA_HOME/bin/jolta" ] \
+  && ok "installed binary is a symlink, not a copy" \
+  || bad "installed binary is a symlink, not a copy" "     regular file"
+check_eq "install link goes through brew's stable opt path" \
+  "$brew/opt/jolta/bin/jolta" "$(readlink "$JOLTA_HOME/bin/jolta")"
+check_eq "shims target the stable installed path, not the keg" \
+  "$JOLTA_HOME/bin/jolta" "$(readlink "$JOLTA_HOME/shims/java")"
+
+# simulate `brew upgrade` + `brew cleanup`: new keg, opt repointed, old keg gone
+mkdir -p "$brew/Cellar/jolta/9.9.10/bin"
+cp "$JOLTA_BIN" "$brew/Cellar/jolta/9.9.10/bin/jolta"
+rm "$brew/opt/jolta" && ln -s "../Cellar/jolta/9.9.10" "$brew/opt/jolta"
+rm -rf "$brew/Cellar/jolta/9.9.9"
+jolta_rc "$JOLTA_HOME/bin/jolta" version
+check_rc "installed jolta still runs after brew upgrade + cleanup" 0 "$rc"
+jolta_rc "$JOLTA_HOME/shims/java" -version
+check_rc "shims still work after brew upgrade + cleanup" 0 "$rc"
+
+# brew uninstall without `jolta implode` leaves the link dangling: doctor names it
+rm "$brew/opt/jolta"
+jolta_rc jolta doctor
+check "doctor flags a dangling brew install link" "DANGLING" "$out"
+
+# non-brew setup still installs a self-contained copy (and restores suite state)
+jolta_rc env HOME="$work/brewhome" SHELL=/bin/sh "$JOLTA_BIN" setup
+check_rc "setup from a plain binary succeeds" 0 "$rc"
+[ -f "$JOLTA_HOME/bin/jolta" ] && [ ! -L "$JOLTA_HOME/bin/jolta" ] \
+  && ok "non-brew setup installs a copy" \
+  || bad "non-brew setup installs a copy" "     missing or symlink"
 
 # =================================================================
 echo

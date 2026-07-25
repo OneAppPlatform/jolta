@@ -42,6 +42,9 @@ brew install OneAppPlatform/tap/jolta
 jolta setup
 ```
 
+(`setup` links the install through brew's stable `opt` path, so a later
+`brew upgrade jolta` takes effect everywhere with no further action.)
+
 Or the curl one-liner (no clone left behind — fetches a prebuilt binary to a temp
 dir, installs into `~/.jolta`, and cleans up):
 
@@ -93,8 +96,9 @@ jolta pin 21        # this project uses Java 21
 jolta default 21    # global fallback when a project has no pin
 ```
 
-Resolution order: `JOLTA_JAVA_VERSION` env var → nearest `.java-version` walking up →
-`jolta default` → system default JDK. On a machine with no JDK at all, the first
+Resolution order: nearest `.java-version` walking up → `jolta default` → system
+default JDK. The pin is authoritative — there is deliberately no env-var override
+that could silently beat it. On a machine with no JDK at all, the first
 `java` run installs the latest LTS (Temurin) and sets it as your default —
 disable with `JOLTA_NO_AUTO_INSTALL=1`.
 
