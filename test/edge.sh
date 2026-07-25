@@ -1250,6 +1250,74 @@ else
 fi
 
 # =================================================================
+section "M. mirror metadata, sync & verify"
+# =================================================================
+
+# metadata gives update/upgrade full precision under a mirror
+publish temurin 44 44.0.1
+env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 44 >/dev/null 2>&1
+printf '44.0.2\n' > "$mirror/temurin/44/latest"
+publish temurin 44 44.0.2
+out=$(env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta update 2>&1)
+check "update sees the mirror's latest metadata" "44.0.1 -> 44.0.2" "$out"
+jolta_rc env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta upgrade 44
+check_rc "metadata-driven upgrade succeeds" 0 "$rc"
+[ -d "$JOLTA_HOME/jdks/temurin-44.0.2" ] && [ ! -d "$JOLTA_HOME/jdks/temurin-44.0.1" ] \
+  && ok "upgrade landed 44.0.2 and pruned 44.0.1" \
+  || bad "upgrade landed 44.0.2 and pruned 44.0.1" "     $(ls -d "$JOLTA_HOME"/jdks/temurin-44* 2>/dev/null)"
+jolta uninstall temurin-44.0.2 >/dev/null 2>&1
+
+# fresh-machine bootstrap picks the mirror's own LTS, fully air-gapped
+printf '43\n' > "$mirror/lts"
+publish temurin 43 43.0.1
+mkdir -p "$work/emptyhome"
+if [ -z "$(env -i PATH=/usr/bin:/bin HOME="$work/emptyhome" JOLTA_HOME="$work/boothome" "$JOLTA_BIN" jdks 2>/dev/null)" ]; then
+  mkdir -p "$work/boothome"
+  env -i PATH=/usr/bin:/bin HOME="$work/emptyhome" JOLTA_HOME="$work/boothome" "$JOLTA_BIN" reshim >/dev/null 2>&1
+  out=$(cd "$work" && env -i PATH="$work/boothome/shims:$bindir:/usr/bin:/bin" \
+        HOME="$work/emptyhome" JOLTA_HOME="$work/boothome" \
+        JOLTA_DOWNLOAD_BASE="file://$mirror" java 2>&1); rc=$?
+  check_rc "air-gapped bootstrap succeeds" 0 "$rc"
+  check "bootstrap installed the mirror's LTS" "fake-java 43.0.1 mirror" "$out"
+  check_eq "bootstrap set the mirror LTS as default" "43" "$(cat "$work/boothome/default" 2>/dev/null)"
+else
+  echo "skip air-gapped bootstrap test (system JDKs present)"
+fi
+
+# mirror sync --from: promote one mirror into another, metadata included
+publish temurin 42 42.0.1
+jolta_rc jolta mirror sync "$work/mirror2" --from "file://$mirror" --vendors temurin --majors 42
+check_rc "mirror sync --from succeeds" 0 "$rc"
+[ -f "$work/mirror2/temurin/42/$plat.tar.gz" ] && [ -f "$work/mirror2/temurin/42/$plat.tar.gz.sha256" ] \
+  && ok "sync wrote the asset and its sha256 sidecar" \
+  || bad "sync wrote the asset and its sha256 sidecar" "     $(ls "$work/mirror2/temurin/42/" 2>/dev/null)"
+check_eq "sync derived the latest metadata from the archive" "42.0.1" \
+  "$(cat "$work/mirror2/temurin/42/latest" 2>/dev/null)"
+check "sync appended index.txt" "42.0.1" "$(cat "$work/mirror2/temurin/index.txt" 2>/dev/null)"
+
+jolta_rc jolta mirror verify "$work/mirror2"
+check_rc "mirror verify passes on a clean mirror" 0 "$rc"
+check "verify reports the verified count" "verified" "$out"
+echo corrupted >> "$work/mirror2/temurin/42/$plat.tar.gz"
+jolta_rc jolta mirror verify "$work/mirror2"
+check_rc "mirror verify fails on a corrupted asset" nonzero "$rc"
+check "verify names the mismatch" "MISMATCH" "$out"
+
+# a synced mirror is immediately installable (checksum verified en route)
+jolta mirror sync "$work/mirror2" --from "file://$mirror" --vendors temurin --majors 42 >/dev/null 2>&1
+jolta_rc env JOLTA_DOWNLOAD_BASE="file://$work/mirror2" jolta install 42
+check_rc "install from the synced mirror succeeds" 0 "$rc"
+check "install verified the synced sidecar" "checksum verified" "$out"
+jolta uninstall temurin-42.0.1 >/dev/null 2>&1
+
+# doctor reports mirror health
+out=$(cd "$work/d" && env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta doctor 2>&1)
+check "doctor reports mirror metadata + LTS" "metadata found, LTS 43" "$out"
+mkdir -p "$work/mirror3"
+out=$(cd "$work/d" && env JOLTA_DOWNLOAD_BASE="file://$work/mirror3" jolta doctor 2>&1)
+check "doctor warns on a metadata-less mirror" "no metadata" "$out"
+
+# =================================================================
 echo
 echo "passed: $pass, failed: $fail"
 if [ "$fail" -gt 0 ]; then

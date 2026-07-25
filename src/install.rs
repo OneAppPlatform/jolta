@@ -18,7 +18,22 @@ use crate::ui::{bold, cyan, die, dim, ok_mark, paint};
 /// set during the one-shot x64 retry so URL builders pick the Rosetta build.
 static FORCE_X64: AtomicBool = AtomicBool::new(false);
 
+/// Every platform a mirror serves. `mirror sync` iterates these; 0 in
+/// PLATFORM_OVERRIDE means "the host platform".
+const SYNC_PLATFORMS: [(&'static str, &'static str, &'static str); 5] = [
+    ("macos", "aarch64", "tar.gz"),
+    ("macos", "x64", "tar.gz"),
+    ("linux", "x64", "tar.gz"),
+    ("linux", "aarch64", "tar.gz"),
+    ("windows", "x64", "zip"),
+];
+static PLATFORM_OVERRIDE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn platform() -> (&'static str, &'static str, &'static str) {
+    let idx = PLATFORM_OVERRIDE.load(Ordering::Relaxed);
+    if idx > 0 {
+        return SYNC_PLATFORMS[idx - 1];
+    }
     let os = match env::consts::OS {
         "macos" => "macos",
         "windows" => "windows",
@@ -324,8 +339,14 @@ fn vendor_url(vendor: &str, major: u32) -> String {
 /// versioned filename the vendor's "latest" URL redirects to — no download.
 /// None when undeterminable (mirrors, vendors that don't redirect).
 pub fn latest_remote_version(vendor: &str, major: u32) -> Option<String> {
-    if env::var("JOLTA_DOWNLOAD_BASE").is_ok() {
-        return None; // mirrors serve a stable path; nothing to learn from it
+    if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
+        // Optional mirror metadata ({base}/{vendor}/{major}/latest, written by
+        // 'jolta mirror sync'): gives update/upgrade/catalog full precision.
+        // Absent -> None, the blind-but-working behavior mirrors always had.
+        let base = encode_spaces(base.trim_end_matches('/'));
+        return curl_text_uncached(&format!("{base}/{vendor}/{major}/latest"))
+            .and_then(|s| s.split_whitespace().next().map(str::to_string))
+            .filter(|v| major_of(v) == Some(major));
     }
     let ck = format!("latest:{vendor}:{major}");
     if let Some(hit) = remote_cache_get(&ck) {
@@ -410,9 +431,29 @@ fn json_number(text: &str, key: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// The Java release universe per Adoptium: (available majors, LTS majors,
-/// most recent LTS, most recent feature release).
+/// The Java release universe: (available majors, LTS majors, most recent LTS,
+/// most recent feature release). Under a mirror this comes from the mirror's
+/// own metadata ({base}/lts + per-vendor index.txt) so catalog, update, and
+/// the fresh-machine LTS bootstrap all work air-gapped; otherwise Adoptium.
 pub fn release_universe() -> Option<(Vec<u32>, Vec<u32>, u32, u32)> {
+    if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
+        let base = encode_spaces(base.trim_end_matches('/'));
+        let lts: u32 = curl_text_uncached(&format!("{base}/lts"))?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()?;
+        let mut available = vec![lts];
+        for vendor in INSTALLABLE_VENDORS {
+            if let Some(idx) = curl_text_uncached(&format!("{base}/{vendor}/index.txt")) {
+                available.extend(idx.lines().filter_map(|l| major_of(l.trim())));
+            }
+        }
+        available.sort_unstable();
+        available.dedup();
+        let feature = *available.iter().max().unwrap_or(&lts);
+        return Some((available, vec![lts], lts, feature));
+    }
     let body = curl_text("https://api.adoptium.net/v3/info/available_releases")?;
     let available = json_number_array(&body, "available_releases");
     let lts = json_number_array(&body, "available_lts_releases");
@@ -506,6 +547,221 @@ pub fn prune_superseded(vendor: &str, major: u32, keep: &str) {
 
 pub fn install_vendor_major(vendor: &str, major: u32) -> Result<String, ()> {
     install_vendor_spec(vendor, &major.to_string())
+}
+
+/// JAVA_VERSION from inside an archive without installing it (tar reads
+/// foreign-platform tar.gz and — via bsdtar — zip alike).
+fn archive_version(archive: &Path) -> Option<String> {
+    let tmp = jolta_home().join("tmp").join(format!("mirror-probe-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::create_dir_all(&tmp);
+    let ok = Command::new("tar")
+        .arg("-xf")
+        .arg(archive)
+        .arg("-C")
+        .arg(&tmp)
+        .status()
+        .is_ok_and(|s| s.success());
+    let v = if ok {
+        fs::read_dir(&tmp)
+            .ok()
+            .and_then(|mut e| e.find_map(|x| x.ok().map(|x| x.path()).filter(|p| p.is_dir())))
+            .and_then(|top| jdk_version(&managed_home(&top)))
+    } else {
+        None
+    };
+    let _ = fs::remove_dir_all(&tmp);
+    v
+}
+
+/// jolta mirror sync <dir> [--from <base>] [--vendors a,b] [--majors 21,17]
+/// jolta mirror verify <dir>
+/// Builds/refreshes an offline mirror in the exact layout JOLTA_DOWNLOAD_BASE
+/// consumes — assets for every platform, .sha256 sidecars, and the metadata
+/// files (per-major `latest`, per-vendor `index.txt`, top-level `lts`) that
+/// give update/upgrade/catalog/bootstrap full precision offline.
+pub fn cmd_mirror(rest: &[String]) {
+    match rest.first().map(String::as_str) {
+        Some("sync") => mirror_sync(&rest[1..]),
+        Some("verify") => mirror_verify(&rest[1..]),
+        _ => die(
+            "usage: jolta mirror sync <dir> [--from <base>] [--vendors temurin,corretto] [--majors 21,17]\n       \
+             jolta mirror verify <dir>",
+        ),
+    }
+}
+
+fn mirror_sync(args: &[String]) {
+    let mut dir: Option<PathBuf> = None;
+    let mut from: Option<String> = None;
+    let mut vendors: Vec<String> = vec!["temurin".into()];
+    let mut majors: Vec<u32> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--from" => from = it.next().map(|s| encode_spaces(s.trim_end_matches('/'))),
+            "--vendors" => {
+                vendors = it.next().map(|s| s.split(',').map(str::to_string).collect()).unwrap_or_default()
+            }
+            "--majors" => {
+                majors = it
+                    .next()
+                    .map(|s| s.split(',').filter_map(|m| m.trim().parse().ok()).collect())
+                    .unwrap_or_default()
+            }
+            other if !other.starts_with('-') && dir.is_none() => dir = Some(PathBuf::from(other)),
+            other => die(&format!("mirror sync: unknown argument '{other}'")),
+        }
+    }
+    let dir = dir.unwrap_or_else(|| die("usage: jolta mirror sync <dir> [--from <base>] [--vendors ...] [--majors ...]"));
+    for v in &vendors {
+        if !INSTALLABLE_VENDORS.contains(&v.as_str()) {
+            die(&format!("unknown vendor '{v}' (downloadable distros: {})", INSTALLABLE_VENDORS.join(", ")));
+        }
+    }
+    // Syncing FROM the vendors must not route through a configured mirror.
+    if from.is_none() {
+        env::remove_var("JOLTA_DOWNLOAD_BASE");
+    }
+    // LTS marker: copy the source mirror's, else ask the release universe.
+    let lts: Option<u32> = match &from {
+        Some(base) => curl_text_uncached(&format!("{base}/lts"))
+            .and_then(|s| s.split_whitespace().next()?.parse().ok()),
+        None => release_universe().map(|(_, _, lts, _)| lts),
+    };
+    if majors.is_empty() {
+        majors = match (&from, release_universe()) {
+            (None, Some((_, lts_set, _, feature))) => {
+                let mut m = lts_set;
+                m.push(feature);
+                m.sort_unstable();
+                m.dedup();
+                m
+            }
+            _ => lts.into_iter().collect(),
+        };
+        if majors.is_empty() {
+            die("cannot determine majors to sync — pass --majors (e.g. --majors 8,11,17,21)");
+        }
+    }
+    println!(
+        "{} syncing {} for majors {} into {}",
+        bold("mirror"),
+        cyan(&vendors.join(", ")),
+        majors.iter().map(u32::to_string).collect::<Vec<_>>().join(", "),
+        dir.display()
+    );
+
+    let mut synced = 0u32;
+    let mut skipped = 0u32;
+    for vendor in &vendors {
+        let mut index: Vec<String> = Vec::new();
+        for major in &majors {
+            let out_dir = dir.join(vendor).join(major.to_string());
+            let _ = fs::create_dir_all(&out_dir);
+            let mut version_meta: Option<String> = None;
+            for (i, (os, arch, ext)) in SYNC_PLATFORMS.iter().enumerate() {
+                PLATFORM_OVERRIDE.store(i + 1, Ordering::Relaxed);
+                let url = match &from {
+                    Some(base) => Some(format!("{base}/{vendor}/{major}/{os}-{arch}.{ext}")),
+                    None if vendor == "zulu" => zulu_url(&major.to_string(), true),
+                    None => Some(vendor_url(vendor, *major)),
+                };
+                PLATFORM_OVERRIDE.store(0, Ordering::Relaxed);
+                let dest = out_dir.join(format!("{os}-{arch}.{ext}"));
+                let label = format!("{vendor}@{major} {os}-{arch}");
+                let ok = url.as_deref().is_some_and(|u| download(u, &dest, &label));
+                if !ok {
+                    let _ = fs::remove_file(&dest);
+                    eprintln!("  {} {label} not available — skipped", paint("33", "!", true));
+                    skipped += 1;
+                    continue;
+                }
+                if let Some(sha) = sha256_file(&dest) {
+                    // full-name suffix: with_extension would eat ".gz"
+                    let _ = fs::write(
+                        PathBuf::from(format!("{}.sha256", dest.display())),
+                        format!("{sha}\n"),
+                    );
+                }
+                synced += 1;
+                if version_meta.is_none() {
+                    version_meta = archive_version(&dest);
+                }
+            }
+            if let Some(v) = &version_meta {
+                let _ = fs::write(out_dir.join("latest"), format!("{v}\n"));
+                index.push(v.clone());
+            }
+        }
+        if !index.is_empty() {
+            let idx_path = dir.join(vendor).join("index.txt");
+            if let Ok(existing) = fs::read_to_string(&idx_path) {
+                index.extend(existing.lines().map(str::to_string));
+            }
+            index.sort_by_key(|v| std::cmp::Reverse(crate::jdk::numkey(v)));
+            index.dedup();
+            let _ = fs::write(&idx_path, index.join("\n") + "\n");
+        }
+    }
+    if let Some(l) = lts {
+        let _ = fs::write(dir.join("lts"), format!("{l}\n"));
+    }
+    println!(
+        "{} {synced} assets synced, {skipped} skipped — serve this directory and set JOLTA_DOWNLOAD_BASE",
+        ok_mark()
+    );
+    if skipped > 0 && synced == 0 {
+        std::process::exit(1);
+    }
+}
+
+fn mirror_verify(args: &[String]) {
+    let dir = args
+        .first()
+        .filter(|a| !a.starts_with('-'))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| die("usage: jolta mirror verify <dir>"));
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.to_string_lossy().ends_with(".tar.gz") || p.to_string_lossy().ends_with(".zip") {
+                out.push(p);
+            }
+        }
+    }
+    let mut assets = Vec::new();
+    walk(&dir, &mut assets);
+    if assets.is_empty() {
+        die(&format!("no mirror assets found under {}", dir.display()));
+    }
+    let (mut ok, mut missing, mut bad) = (0u32, 0u32, 0u32);
+    for asset in assets {
+        let sidecar = PathBuf::from(format!("{}.sha256", asset.display()));
+        let Ok(want) = fs::read_to_string(&sidecar) else {
+            println!("  {} {} (no .sha256 sidecar)", paint("33", "!", true), asset.display());
+            missing += 1;
+            continue;
+        };
+        let want = want.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        match sha256_file(&asset) {
+            Some(got) if got == want => {
+                println!("  {} {}", ok_mark(), asset.display());
+                ok += 1;
+            }
+            _ => {
+                println!("  {} {} CHECKSUM MISMATCH", paint("31", "✗", true), asset.display());
+                bad += 1;
+            }
+        }
+    }
+    println!("{ok} verified, {missing} without sidecars, {bad} corrupt");
+    if bad > 0 {
+        std::process::exit(1);
+    }
 }
 
 pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {

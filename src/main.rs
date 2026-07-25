@@ -134,6 +134,7 @@ fn main() {
             let shell = rest.first().cloned().unwrap_or_else(shell_name);
             cmd_hook(&shell);
         }
+        "mirror" => install::cmd_mirror(&rest),
         "reshim" => cmd_reshim(),
         "doctor" => exit(cmd_doctor()),
         "implode" => cmd_implode(&rest),

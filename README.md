@@ -167,6 +167,21 @@ endpoints. The mirror uses a flat layout — `{base}/{vendor}/{version}/{os}-{ar
 with `macos|linux|windows`, `aarch64|x64`, and `tar.gz` (`zip` on Windows), e.g.
 `https://artifacts.corp/jdks/temurin/21/linux-x64.tar.gz`.
 
+Building the mirror is one command — any static file server, S3 bucket, or
+Artifactory repo can serve the result:
+
+```sh
+jolta mirror sync /srv/jdks --vendors temurin,corretto --majors 8,11,17,21,25
+jolta mirror verify /srv/jdks    # re-hash everything (for cron)
+```
+
+`sync` downloads every platform's asset, writes `.sha256` sidecars (verified on
+every install), and emits metadata files — per-major `latest`, per-vendor
+`index.txt`, and a top-level `lts` marker — that make `jolta update`, `upgrade`,
+`catalog`, and even the fresh-machine LTS bootstrap work fully air-gapped.
+`--from file:///staging/jdks` promotes one mirror into another. A mirror without
+metadata still works; jolta just can't tell you what's newest.
+
 ```sh
 jolta list          # everything jolta can see, with the active one starred
 jolta install 21           # explicitly download Temurin 21

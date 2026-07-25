@@ -203,7 +203,11 @@ never triggered by merely <code>cd</code>-ing around, safe under parallel builds
 disabled with <code>JOLTA_NO_AUTO_INSTALL=1</code>. Restricted networks can set
 <code>JOLTA_DOWNLOAD_BASE</code> to serve JDKs from an internal mirror
 (<code>{base}/{vendor}/{version}/{os}-{arch}.{ext}</code>) instead of the vendor
-endpoints.</p>
+endpoints — and <code>jolta mirror sync /srv/jdks</code> builds that mirror for you:
+all platforms, sha256 sidecars verified on every install, and metadata that keeps
+<code>update</code>/<code>upgrade</code>/<code>catalog</code> and the first-run LTS
+bootstrap working fully air-gapped. <code>jolta mirror verify</code> re-hashes it on
+a schedule.</p>
 <p>Jolta also finds the JDKs you already have: Homebrew,
 <code>/Library/Java/JavaVirtualMachines</code>, SDKMAN, <code>/usr/lib/jvm</code>,
 Windows <code>Program Files</code>, and <code>JAVA_HOME_&lt;major&gt;_*</code> environment
@@ -281,6 +285,7 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td><code>jolta env</code></td><td>Print <code>export</code> lines for <code>eval</code></td></tr>
 <tr><td><code>jolta home</code></td><td>Print the resolved <code>JAVA_HOME</code></td></tr>
 <tr><td><code>jolta hook [shell]</code></td><td>Print the cd hook (zsh, bash, powershell)</td></tr>
+<tr><td><code>jolta mirror sync|verify</code></td><td>Build or re-hash an offline JDK mirror (<code>JOLTA_DOWNLOAD_BASE</code>)</td></tr>
 <tr><td><code>jolta reshim</code></td><td>Regenerate shims after installing JDKs elsewhere</td></tr>
 <tr><td><code>jolta doctor</code></td><td>Diagnose PATH / shim / <code>JAVA_HOME</code> problems</td></tr>
 <tr><td><code>jolta implode</code></td><td>Uninstall jolta completely</td></tr>
@@ -315,6 +320,10 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
   <td class="y">✓</td><td class="y">✓</td><td class="n">WSL</td><td class="n">✗</td><td class="n">✗</td></tr>
 <tr><td>Corporate mirror support</td>
   <td class="y">✓</td><td class="m">partial</td><td class="n">✗</td><td class="n">✗</td><td class="m">partial</td></tr>
+<tr><td>Builds &amp; verifies the mirror for you (<code>mirror sync</code>)</td>
+  <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
+<tr><td>Air-gapped updates &amp; catalog (mirror metadata)</td>
+  <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
 <tr><td>Also manages Maven/Gradle/other tools</td>
   <td class="n">✗</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td></tr>
 <tr><td>Zero config files of its own</td>

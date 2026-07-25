@@ -45,6 +45,8 @@ pub fn usage() {
     row("env", "Print export statements for eval in scripts");
     row("home", "Print the resolved JAVA_HOME for this directory");
     row("hook [zsh|bash]", "Print shell hook code that keeps JAVA_HOME in sync on cd");
+    row("mirror sync|verify", "Build or check an offline JDK mirror for JOLTA_DOWNLOAD_BASE");
+    cont("sync <dir> [--from <base>] [--vendors a,b] [--majors 21,17]");
     row("reshim", "Regenerate shims from installed JDKs");
     row("doctor", "Diagnose common setup problems");
     row("implode", "Uninstall jolta completely (~/.jolta + shell profile lines)");
@@ -1127,6 +1129,18 @@ pub fn cmd_doctor() -> i32 {
                     warn_mark(),
                     rc_file.display()
                 );
+            }
+        }
+    }
+
+    if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
+        match crate::install::release_universe() {
+            Some((_, _, lts, _)) => {
+                println!("  mirror:        {} {base} (metadata found, LTS {lts})", ok_mark());
+            }
+            None => {
+                println!("  mirror:        {} {base} has no metadata — update/catalog run blind", warn_mark());
+                println!("                 'jolta mirror sync' writes latest/index.txt/lts files");
             }
         }
     }
