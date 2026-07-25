@@ -83,7 +83,7 @@ td.m { color: var(--accent2); }
 .sig { color: var(--muted); font-size: .95rem; margin-top: -8px; }
 .manual-top { border-bottom: 1px solid var(--border); }
 .manual-top .wrap { display: flex; align-items: center; gap: 16px; padding: 10px 20px; }
-.manual-top img { height: 34px; width: auto; display: block; }
+.manual-top img { height: 52px; width: auto; display: block; }
 .manual-top .links { margin-left: auto; display: flex; gap: 18px; font-size: .95rem; }
 @media (max-width: 860px) {
   .manual-layout { grid-template-columns: 1fr; }
