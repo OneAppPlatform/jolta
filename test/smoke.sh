@@ -210,6 +210,29 @@ check ".java-version beats .sdkmanrc" "99.0.1" "$(jolta current 2>/dev/null | he
 cd "$work"
 jolta uninstall temurin-99.0.5 >/dev/null 2>&1 || true
 jolta uninstall temurin-99.0.1 >/dev/null 2>&1 || true
+
+# 16e. fresh machine: the FIRST install pins the global default, so plain
+# `java` resolves with no .java-version and nothing registered in java_home
+fresh="$work/fresh-home"
+out=$(JOLTA_HOME="$fresh" JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 99.0.5 2>&1) || true
+check "fresh-home install succeeds" "installed temurin 99.0.5" "$out"
+check "first install announces default" "default Java version" "$out"
+check "default file written" "^99\.0\.5\$" "$(cat "$fresh/default" 2>/dev/null || echo missing)"
+check "unpinned resolve uses new default" "99\.0\.5" "$(cd "$work" && JOLTA_HOME="$fresh" jolta current 2>&1)"
+
+# 16f. re-installing an exact version already on disk downloads nothing
+out=$(JOLTA_HOME="$fresh" JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 99.0.5 2>&1) || true
+check "exact re-install is a no-op" "already installed" "$out"
+if printf '%s' "$out" | grep -q "downloading"; then
+  fail=$((fail+1)); echo "FAIL exact re-install skips download (got: $out)"
+else
+  pass=$((pass+1)); echo "ok   exact re-install skips download"
+fi
+
+# 16g. a second install must NOT steal an existing default
+out=$(JOLTA_HOME="$fresh" JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 99 2>&1) || true
+check "second install keeps default" "^99\.0\.5\$" "$(cat "$fresh/default")"
+rm -rf "$fresh"
 rm -rf "$mirror"
 
 # 17. auto-install: pinning an uninstalled major downloads it (network, opt-in)

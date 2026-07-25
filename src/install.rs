@@ -462,6 +462,15 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
         }
     };
 
+    // An exact version already on disk needs no download; non-exact specs
+    // still hit the network to learn the latest build for their major.
+    if is_exact(version) {
+        if let Some(h) = resolve(&format!("{vendor}-{version}")) {
+            println!("  {} {vendor} {version} is already installed", ok_mark());
+            return Ok(jdk_version(&h).unwrap_or_default());
+        }
+    }
+
     let url = if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
         let (os, arch, ext) = platform();
         format!("{}/{vendor}/{version}/{os}-{arch}.{ext}", base.trim_end_matches('/'))

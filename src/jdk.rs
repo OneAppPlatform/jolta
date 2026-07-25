@@ -215,7 +215,8 @@ pub fn list_all() -> Vec<(String, PathBuf)> {
 }
 
 /// System default JDK home, used when nothing is pinned and no jolta default
-/// set: macOS asks java_home; elsewhere fall back to the newest JDK found.
+/// set: macOS asks java_home first, but managed JDKs are invisible to it, so
+/// when it has nothing (or off macOS) fall back to the newest JDK found.
 pub fn system_default() -> Option<PathBuf> {
     if Path::new("/usr/libexec/java_home").exists() {
         if let Ok(o) = Command::new("/usr/libexec/java_home").output() {
@@ -226,7 +227,6 @@ pub fn system_default() -> Option<PathBuf> {
                 }
             }
         }
-        return None;
     }
     list_all()
         .into_iter()

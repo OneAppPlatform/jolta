@@ -362,6 +362,19 @@ pub fn cmd_install(spec: &str) {
     if install_vendor_spec(vendor, &version).is_err() {
         std::process::exit(1);
     }
+    // First JDK on this machine: pin it as the global default so plain `java`
+    // works right away (macOS java_home never reports managed JDKs).
+    let default = jolta_home().join("default");
+    if !default.exists() {
+        let _ = fs::create_dir_all(jolta_home());
+        fs::write(&default, format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write default: {e}")));
+        println!(
+            "{} set {} as your default Java version {}",
+            ok_mark(),
+            bold(spec),
+            dim("(change with 'jolta default <version>')")
+        );
+    }
 }
 
 /// Set of (distro, full version) currently installed on this machine, for
