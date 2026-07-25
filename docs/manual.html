@@ -54,28 +54,63 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <!-- End Google Tag Manager (noscript) -->
 
-<header class="hero">
+<div class="manual-top">
   <div class="wrap">
-    <h1 class="sr-only">Jolta manual</h1>
-    <picture>
+    <a href="index.html"><picture>
       <source media="(prefers-color-scheme: dark)" srcset="logo-dark.png">
-      <a href="index.html"><img src="logo.png" alt="Jolta — the hands-off Java version manager"></a>
-    </picture>
-    <p class="tag">The manual.<br><a href="index.html">← back to the overview</a></p>
+      <img src="logo.png" alt="Jolta">
+    </picture></a>
+    <strong>Manual</strong>
+    <div class="links">
+      <a href="index.html">Overview</a>
+      <a href="https://github.com/OneAppPlatform/jolta">GitHub</a>
+    </div>
   </div>
-</header>
+</div>
 
-<nav class="toc"><div class="wrap">
-  <a href="index.html">Overview</a>
-  <a href="#commands">Commands</a>
-  <a href="#pinning">Pinning</a>
+<div class="manual-layout">
+
+<aside class="sidebar"><nav>
+  <div class="group">Start</div>
+  <a href="#commands">Commands at a glance</a>
+  <div class="group">Everyday</div>
+  <a href="#cmd-pin"><code>pin</code></a>
+  <a href="#cmd-current"><code>current</code></a>
+  <a href="#cmd-list"><code>list</code> / <code>jdks</code></a>
+  <a href="#cmd-which"><code>which</code> / <code>home</code></a>
+  <a href="#cmd-exec"><code>exec</code> / <code>env</code></a>
+  <a href="#cmd-default"><code>default</code></a>
+  <div class="group">Installing &amp; updating</div>
+  <a href="#cmd-install"><code>install</code></a>
+  <a href="#cmd-catalog"><code>catalog</code></a>
+  <a href="#cmd-update"><code>update</code> / <code>upgrade</code></a>
+  <a href="#cmd-prune"><code>prune</code></a>
+  <a href="#cmd-uninstall"><code>uninstall</code></a>
+  <a href="#cmd-vendor"><code>vendor</code></a>
+  <div class="group">Mirrors</div>
+  <a href="#cmd-mirror"><code>mirror sync</code> / <code>verify</code></a>
+  <a href="#mirror-layout">Mirror layout &amp; metadata</a>
+  <div class="group">Integration</div>
+  <a href="#cmd-setup"><code>setup</code></a>
+  <a href="#cmd-hook"><code>hook</code></a>
+  <a href="#cmd-reshim"><code>reshim</code></a>
+  <a href="#cmd-doctor"><code>doctor</code></a>
+  <a href="#cmd-implode"><code>implode</code></a>
+  <div class="group">Reference</div>
+  <a href="#specs">Version specs</a>
+  <a href="#precedence">Resolution precedence</a>
+  <a href="#pinning">Pinning files</a>
   <a href="#distros">Distros</a>
-  <a href="#java-home">JAVA_HOME &amp; builds</a>
-</div></nav>
+  <a href="#java-home">JAVA_HOME, Maven &amp; Gradle</a>
+  <a href="#discovery">Where JDKs are found</a>
+  <a href="#env-vars">Environment variables</a>
+</nav></aside>
 
-<main class="wrap">
+<article class="manual-main">
+<h1 class="sr-only">The jolta manual</h1>
 
-<h2 id="commands">Commands</h2>
+<h2 id="commands">Commands at a glance</h2>
+<p>Every command, one line each — deep dives follow.</p>
 <table>
 <tr><th>Command</th><th>What it does</th></tr>
 <tr><td><code>jolta setup</code></td><td>Install shims + shell profile setup</td></tr>
@@ -101,6 +136,259 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <tr><td><code>jolta doctor</code></td><td>Diagnose PATH / shim / <code>JAVA_HOME</code> problems</td></tr>
 <tr><td><code>jolta implode</code></td><td>Uninstall jolta completely</td></tr>
 </table>
+
+
+<h2 id="everyday">Everyday commands</h2>
+
+<h3 id="cmd-pin"><code>jolta pin &lt;spec&gt;</code></h3>
+<p class="sig">Pin a Java version for this project.</p>
+<p>Writes the spec to <code>./.java-version</code> (a single line — commit it). If no
+installed JDK satisfies the spec, jolta downloads one on the spot, exactly as a shim
+would have on first use; with <code>JOLTA_NO_AUTO_INSTALL=1</code> it warns and writes
+the pin anyway. Pinning bumps jolta's state stamp, so shells running the
+<a href="#cmd-hook">hook</a> refresh <code>JAVA_HOME</code> at their next prompt —
+no <code>cd</code> needed.</p>
+<pre><code>jolta pin 21              # any distro, newest 21.x wins
+jolta pin corretto@21     # this project wants Corretto specifically
+jolta pin 21.0.4          # exact: this build or nothing</code></pre>
+<p>Resolutions remember which file pinned them, which is how
+<a href="#cmd-prune"><code>prune</code></a> knows a build is still referenced.</p>
+
+<h3 id="cmd-current"><code>jolta current</code></h3>
+<p class="sig">What resolves here, and why.</p>
+<p>Prints the resolved full version, its distro, the source that selected it — the
+<code>JOLTA_JAVA_VERSION</code> variable, the path of the winning
+<code>.java-version</code>/<code>.sdkmanrc</code>, the global default, or the system
+JDK — and the home path. When the answer surprises you, the source line is the
+explanation.</p>
+<pre><code>$ jolta current
+21.0.4 (temurin) (from /work/api/.java-version)
+/Users/you/.jolta/jdks/temurin-21.0.4</code></pre>
+
+<h3 id="cmd-list"><code>jolta list</code> · <code>jolta jdks</code></h3>
+<p class="sig">Human and machine views of every visible JDK.</p>
+<p><code>list</code> (alias <code>ls</code>) shows jolta-managed installs and
+<a href="#discovery">discovered system JDKs</a> with their distros, starring the one
+active in the current directory and naming the pin that selected it.
+<code>jdks</code> prints the same data as tab-separated
+<code>major&nbsp;·&nbsp;version&nbsp;·&nbsp;distro&nbsp;·&nbsp;home</code> rows for
+scripts — stdout is clean, warnings go to stderr.</p>
+
+<h3 id="cmd-which"><code>jolta which [tool]</code> · <code>jolta home</code></h3>
+<p class="sig">The exact paths a shim would use.</p>
+<p><code>which</code> prints the full path of the tool binary the shim would exec
+(default <code>java</code>) — it runs the same resolution as the shim, so the two can
+never disagree. <code>home</code> prints the resolved <code>JAVA_HOME</code>, nothing
+else, making it safe for command substitution:</p>
+<pre><code>export JAVA_HOME="$(jolta home)"
+jolta which javac         # .../jdks/temurin-21.0.4/bin/javac</code></pre>
+<p>Both fail with a non-zero exit and an actionable message when the pin can't be
+satisfied — never a fabricated path.</p>
+
+<h3 id="cmd-exec"><code>jolta exec &lt;cmd&gt; [args…]</code> · <code>jolta env</code></h3>
+<p class="sig">Run anything under the project's JDK; export it in scripts.</p>
+<p><code>exec</code> resolves the pin, sets <code>JAVA_HOME</code>, prepends the JDK's
+<code>bin</code> to <code>PATH</code>, and execs your command — arguments pass through
+byte-for-byte, the child's exit code is yours, and a missing JDK auto-installs first.
+It's the right way to run launcher scripts that consult <code>JAVA_HOME</code>
+(<code>mvnw</code>, <code>gradlew</code>) from CI or Makefiles. <code>env</code> prints
+shell-quoted <code>export</code> lines for the same environment:</p>
+<pre><code>jolta exec ./mvnw verify
+eval "$(jolta env)"       # JAVA_HOME + PATH for the rest of the script</code></pre>
+
+<h3 id="cmd-default"><code>jolta default &lt;spec&gt;</code></h3>
+<p class="sig">The global fallback version.</p>
+<p>Used whenever no <code>.java-version</code>/<code>.sdkmanrc</code> claims the
+directory. Stored as a one-line file in <code>$JOLTA_HOME/default</code>; warns (but
+still writes) when nothing installed matches yet. On a fresh machine with no default
+and no pin, the first <code>java</code> invocation installs the latest LTS and sets it
+as the default automatically.</p>
+
+<h2 id="installing">Installing &amp; updating</h2>
+
+<h3 id="cmd-install"><code>jolta install &lt;spec&gt;</code></h3>
+<p class="sig">Download a JDK from its vendor.</p>
+<p>Accepts every spec form: <code>21</code> (latest 21.x of the
+<a href="#cmd-vendor">preferred vendor</a>, default Temurin), <code>corretto@21</code>,
+<code>21.0.4</code> (that exact release), <code>zulu@21.0.4</code>. Installs land in
+<code>$JOLTA_HOME/jdks/&lt;distro&gt;-&lt;version&gt;</code> and are re-shimmed
+immediately.</p>
+<p>Installs are defensive: concurrent installs of the same version serialize on a
+lock (parallel builds can fire many shims at once); a published
+<code>.sha256</code> sidecar is verified when present; the extracted JVM must
+actually execute before it is promoted — a wrong-architecture or wrong-libc download
+fails at install time with a clear message instead of a cryptic loader error at first
+use. On Apple Silicon, majors that never shipped arm64 builds (8, 11) automatically
+retry as x64 and run under Rosetta. Alpine/musl systems get musl builds from the
+distros that publish them (temurin, zulu, liberica).</p>
+
+<h3 id="cmd-catalog"><code>jolta catalog [x]</code></h3>
+<p class="sig">What's published, before you install it. Aliases: <code>search</code>, <code>available</code>, <code>ls-remote</code>.</p>
+<pre><code>jolta catalog             # latest per distro, plus the Java release universe
+jolta catalog 21          # each distro's latest 21.x
+jolta catalog temurin     # Temurin's latest per major (LTS + current)
+jolta catalog temurin@21.0   # @v is a prefix filter: every published 21.0.x</code></pre>
+<p>Installed versions are marked <code>✓</code>. Results cache for 24&nbsp;hours
+(<code>JOLTA_CACHE_TTL_HOURS</code> tunes it); <code>--fresh</code> refetches. Under a
+mirror, the catalog reads the mirror's own <a href="#mirror-layout">metadata</a>.</p>
+
+<h3 id="cmd-update"><code>jolta update</code> · <code>jolta upgrade [spec]</code></h3>
+<p class="sig">Point-release maintenance for jolta-managed JDKs. Alias: <code>outdated</code>.</p>
+<p><code>update</code> reports newer point releases without downloading anything — the
+latest version is learned from vendor metadata (or the redirect chain's versioned
+filename, or mirror metadata). <code>upgrade</code> fetches the newer build, switches
+resolution to it, and removes the superseded install — unless a project pin still
+references the old build, in which case it is kept and reported
+(<code>kept temurin-21.0.1 (pinned by /work/api/.java-version)</code>). Majors are
+independent: <code>jolta upgrade 17</code> never touches 21. System JDKs are left to
+their own package managers; because resolution picks the highest build of a major, a
+<code>brew upgrade</code>d JDK takes effect automatically.</p>
+
+<h3 id="cmd-prune"><code>jolta prune [spec] [--dry-run]</code></h3>
+<p class="sig">Reclaim disk without breaking anything.</p>
+<p>Two tiers. Within each distro+major, the newest build is kept and older builds are
+removed. Then entire majors go when they are non-LTS, superseded by a higher installed
+major, and not the current feature release — <code>22</code> after <code>24</code>
+arrived, say. Both tiers are <strong>pin-aware</strong>: jolta remembers every project
+pin it has ever resolved, re-reads those files at prune time (the files are the truth;
+the memory is just an index), and keeps anything still referenced, telling you which
+file protected it. A spec scopes everything: <code>jolta prune 17</code>,
+<code>jolta prune temurin@17</code>. <code>-n</code>/<code>--dry-run</code> previews.</p>
+
+<h3 id="cmd-uninstall"><code>jolta uninstall &lt;spec&gt;</code></h3>
+<p class="sig">Remove one jolta-managed JDK.</p>
+<p>Takes the same spec forms as install (<code>25</code>, <code>temurin@25</code>, or a
+full name like <code>temurin-25.0.3</code>); an ambiguous spec lists the minimal
+commands that would disambiguate. Removes only from <code>$JOLTA_HOME/jdks</code> —
+never a system JDK — then clears caches and re-shims so tools provided only by the
+removed JDK disappear from the shim set.</p>
+
+<h3 id="cmd-vendor"><code>jolta vendor [name | --unset]</code></h3>
+<p class="sig">Prefer a distro without editing every repo.</p>
+<p>Sets the preferred vendor for <em>vendorless</em> specs (also settable per-shell via
+<code>JOLTA_VENDOR</code>). Resolution then prefers that vendor's builds — even over a
+<em>higher</em> build of another distro: with <code>vendor corretto</code>, a pin of
+<code>11</code> picks Corretto 11.0.31 over Temurin 11.0.32. Vendorless installs and
+auto-installs fetch the preference too. Explicit specs
+(<code>temurin@21</code>, <code>.sdkmanrc</code> suffixes) always win, and one
+precedence ladder is shared by every command, so there is nowhere the preference
+applies inconsistently.</p>
+
+<h2 id="mirrors">Mirrors</h2>
+
+<h3 id="cmd-mirror"><code>jolta mirror sync</code> · <code>jolta mirror verify</code></h3>
+<p class="sig">Build and maintain an offline JDK mirror in one command.</p>
+<pre><code>jolta mirror sync /srv/jdks --vendors temurin,corretto --majors 8,11,17,21,25
+jolta mirror verify /srv/jdks          # re-hash everything (cron this)
+jolta mirror sync /srv/jdks --from file:///staging/jdks   # promote a mirror</code></pre>
+<p><code>sync</code> downloads every platform's asset (macOS arm64/x64, Linux
+x64/arm64, Windows x64), writes <code>.sha256</code> sidecars — which installs verify —
+and emits the metadata files below, derived from the archives themselves.
+<code>verify</code> re-hashes every asset and exits non-zero on corruption.
+<code>--from</code> reads another mirror instead of the vendors, for staging→production
+promotion. Serve the directory with any static file server, S3 bucket, or Artifactory
+repo, and point clients at it with <code>JOLTA_DOWNLOAD_BASE</code>.</p>
+
+<h3 id="mirror-layout">Mirror layout &amp; metadata</h3>
+<pre><code>{base}/{vendor}/{version}/{os}-{arch}.{ext}     # assets:  temurin/21/linux-x64.tar.gz
+{base}/{vendor}/{version}/{os}-{arch}.{ext}.sha256
+{base}/{vendor}/{major}/latest                  # metadata: contains e.g. 21.0.4
+{base}/{vendor}/index.txt                       # one version per line
+{base}/lts                                      # contains e.g. 21</code></pre>
+<p><code>version</code> in an asset path is whatever spec clients request — a major
+like <code>21</code> or an exact <code>21.0.4</code>. The metadata is optional but
+powerful: with it, <code>update</code>/<code>upgrade</code> know what's newest,
+<code>catalog</code> works, and a fresh machine's first <code>java</code> bootstraps
+the mirror's own LTS — all fully air-gapped. Without it, installs still work; jolta
+just can't tell you what's newest. <code>doctor</code> reports whether your mirror has
+metadata.</p>
+
+<h2 id="integration">Integration</h2>
+
+<h3 id="cmd-setup"><code>jolta setup</code></h3>
+<p class="sig">One-time install: shims, profile, hook.</p>
+<p>Copies the binary into <code>$JOLTA_HOME/bin</code> (the downloaded file can be
+deleted afterwards), generates shims, and adds two marked blocks to your shell profile:
+the <code>PATH</code> prepend and the <code>JAVA_HOME</code> hook line. Idempotent —
+re-running from a newer binary upgrades the installed copy and never duplicates
+profile lines. On Windows it prints the two manual steps instead (user
+<code>PATH</code> additions and the PowerShell <code>$PROFILE</code> hook line).</p>
+
+<h3 id="cmd-hook"><code>jolta hook [zsh|bash|powershell]</code></h3>
+<p class="sig">Keeps <code>JAVA_HOME</code> in sync; everything else works without it.</p>
+<p>Prints shell code (installed by <code>setup</code>, or
+<code>eval "$(jolta hook zsh)"</code> yourself) that re-exports <code>JAVA_HOME</code>
+when you change directory <em>and</em> whenever jolta's state changes — every mutating
+command bumps a stamp file the hook checks before each prompt, so
+<code>jolta pin 17</code> takes effect at the very next prompt with no
+<code>cd</code>, and the shell's command cache is rehashed after installs. If a pin
+can't be satisfied the hook <em>unsets</em> <code>JAVA_HOME</code> so builds fail
+loudly rather than on the wrong JDK. The hook prints nothing to stdout, survives
+<code>set&nbsp;-u</code>/<code>set&nbsp;-e</code>, and works on macOS's ancient
+<code>/bin/bash</code> 3.2.</p>
+
+<h3 id="cmd-reshim"><code>jolta reshim</code></h3>
+<p class="sig">Regenerate the shim set.</p>
+<p>Rebuilds <code>$JOLTA_HOME/shims</code>: the full baseline JDK toolset (shimmed even
+before any JDK is installed, so the very first <code>java</code> can bootstrap), plus
+every extra executable your installed JDKs ship — GraalVM's <code>gu</code> and
+<code>native-image</code>, for instance. Bundled language runtimes
+(<code>node</code>, <code>python</code>, <code>ruby</code>…) are deliberately
+<em>not</em> shimmed so jolta never hijacks your other version managers. Runs
+automatically after installs and uninstalls; run it manually after installing a JDK
+outside jolta.</p>
+
+<h3 id="cmd-doctor"><code>jolta doctor</code></h3>
+<p class="sig">Diagnose the whole chain; exit 0 means healthy.</p>
+<p>Checks that shims exist and win on <code>PATH</code> (naming any binary shadowing
+them), that <code>JAVA_HOME</code> matches what the current directory should resolve
+(catching stale exports that would mislead Maven/Gradle), that the resolved
+<code>java</code> matches your CPU architecture, that no <code>~/.mavenrc</code> sets
+<code>JAVA_HOME</code> behind jolta's back, mirror reachability and metadata when
+<code>JOLTA_DOWNLOAD_BASE</code> is set, and prints the pin and preferred vendor in
+effect. CI-friendly: the exit code is the verdict.</p>
+
+<h3 id="cmd-implode"><code>jolta implode</code></h3>
+<p class="sig">Complete, surgical uninstall.</p>
+<p>Removes <code>$JOLTA_HOME</code> and the marked jolta blocks from your shell
+profile — after a confirmation prompt (<code>--yes</code> skips) that lists exactly
+which jolta-installed JDKs will be deleted. System JDKs and your projects'
+<code>.java-version</code> files are never touched.</p>
+
+<h2 id="specs">Version specs</h2>
+<p>A spec is a version with an optional distro, joined by <code>@</code> or
+<code>-</code> (case-insensitive): <code>21</code>, <code>21.0.4</code>,
+<code>corretto@21</code>, <code>graalvm-25</code>, <code>temurin@8</code>.</p>
+<ul>
+  <li><strong>Majors</strong> (<code>21</code>) match the highest installed build of
+      that major, subject to the <a href="#precedence">precedence ladder</a>.</li>
+  <li><strong>Exact versions</strong> (<code>21.0.4</code>) mean exact — never
+      satisfied by some other 21.x. Comparison is numeric, so <code>21.0.4+9</code>
+      matches an installed <code>21.0.4</code> and vice versa; build metadata after
+      <code>+</code> is insignificant.</li>
+  <li><strong>Legacy notation</strong> works: <code>1.8</code> is major 8, and
+      <code>1.8.0_392</code>-style update numbers order correctly.</li>
+  <li><strong>Early access</strong>: a spec ending <code>-ea</code> matches only EA
+      builds; GA specs prefer GA and use an EA build only when nothing else provides
+      the major.</li>
+</ul>
+
+<h2 id="precedence">Resolution precedence</h2>
+<p>Two ladders, evaluated in order. First, <em>which spec applies here</em>:</p>
+<ol>
+  <li><code>JOLTA_JAVA_VERSION</code> environment variable</li>
+  <li>the nearest <code>.java-version</code> or <code>.sdkmanrc</code>, walking up
+      from the current directory (<code>.java-version</code> wins inside one
+      directory)</li>
+  <li>the global <code>jolta default</code></li>
+  <li>the system default JDK</li>
+</ol>
+<p>Then, <em>which installed JDK satisfies the spec</em>: an explicit distro in the
+spec filters hard; otherwise <strong>preferred-vendor GA &gt; any GA &gt;
+preferred-vendor EA &gt; any EA</strong>, highest build within the winning tier — the
+<a href="#cmd-vendor">preferred vendor</a> beats even a higher build of another
+distro. Version ties prefer jolta-managed JDKs over system ones, then break
+alphabetically, so the answer is always deterministic.</p>
 
 <h2 id="pinning">Pinning</h2>
 <p>The pin is a plain <code>.java-version</code> file (compatible with jenv and asdf) —
@@ -157,7 +445,34 @@ their upgrades apply automatically.</p>
 scripts and CI, use <code>jolta exec mvn ...</code> or
 <code>eval "$(jolta env)"</code>. <code>jolta doctor</code> flags stale values.</p>
 
-</main>
+<h2 id="discovery">Where JDKs are found</h2>
+<p>Every invocation sees the union of: jolta's own installs
+(<code>$JOLTA_HOME/jdks</code>); macOS's <code>/usr/libexec/java_home&nbsp;-V</code>
+(which covers <code>/Library/Java/JavaVirtualMachines</code>, Homebrew casks, and
+IntelliJ-downloaded JDKs); <code>/usr/lib/jvm</code>; SDKMAN's
+<code>~/.sdkman/candidates/java</code> (vendor read from the directory suffix,
+<code>Contents/Home</code> bundles handled, JDK&nbsp;8-era installs without a
+<code>release</code> file identified by directory name); Windows vendor directories
+under <code>Program Files</code>; and <code>JAVA_HOME_&lt;major&gt;_&lt;arch&gt;</code>
+environment variables (as set by GitHub Actions runners). No registration step —
+if it's on the machine, it resolves.</p>
+
+<h2 id="env-vars">Environment variables</h2>
+<table>
+<tr><th>Variable</th><th>Effect</th></tr>
+<tr><td><code>JOLTA_HOME</code></td><td>State root (default <code>~/.jolta</code>); a leading <code>~</code> is expanded</td></tr>
+<tr><td><code>JOLTA_JAVA_VERSION</code></td><td>Spec override beating every pin file — per-shell or per-command</td></tr>
+<tr><td><code>JOLTA_VENDOR</code></td><td>Preferred distro for vendorless specs (same as <code>jolta vendor</code>)</td></tr>
+<tr><td><code>JOLTA_NO_AUTO_INSTALL</code></td><td>Set to disable all on-demand downloads; missing JDKs become clean errors</td></tr>
+<tr><td><code>JOLTA_DOWNLOAD_BASE</code></td><td>Mirror base URL (<code>https://</code> or <code>file://</code>) replacing every vendor endpoint</td></tr>
+<tr><td><code>JOLTA_FRESH</code> / <code>--fresh</code></td><td>Drop the remote-metadata cache for this invocation, then re-cache</td></tr>
+<tr><td><code>JOLTA_CACHE_TTL_HOURS</code></td><td>Remote-metadata cache lifetime (default 24)</td></tr>
+<tr><td><code>JAVA_HOME_&lt;major&gt;_*</code></td><td>Registers an extra JDK for discovery (CI images set these)</td></tr>
+<tr><td><code>NO_COLOR</code>, <code>TERM=dumb</code></td><td>Plain output; piped output is always uncolored</td></tr>
+</table>
+
+</article>
+</div>
 
 <footer>
   <div class="wrap">

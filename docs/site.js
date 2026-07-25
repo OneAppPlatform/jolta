@@ -67,3 +67,22 @@ document.querySelectorAll('main pre:not(.demo) > code').forEach(function (code) 
     wrap.appendChild(btn);
   });
 })();
+
+// Manual sidebar scrollspy: highlight the section closest to the viewport top.
+(function () {
+  var side = document.querySelector('.sidebar');
+  if (!side) return;
+  var links = Array.prototype.slice.call(side.querySelectorAll('a[href^="#"]'));
+  var targets = links.map(function (a) {
+    return document.getElementById(a.getAttribute('href').slice(1));
+  });
+  function spy() {
+    var current = 0;
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i] && targets[i].getBoundingClientRect().top <= 90) current = i;
+    }
+    links.forEach(function (a, i) { a.classList.toggle('active', i === current); });
+  }
+  document.addEventListener('scroll', spy, { passive: true });
+  spy();
+})();
