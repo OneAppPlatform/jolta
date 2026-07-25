@@ -78,6 +78,14 @@ th { color: var(--muted); font-weight: 600; }
 .pill { display: inline-block; background: var(--code-bg); border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; font-size: .85rem; margin: 2px; }
 footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(--muted); font-size: .9rem; text-align: center; }
 .demo { color: #93a3b3; }
+@media print {
+  pre, pre.demo { background: #fff; border-color: #bbb; color: #111; }
+  .demo { color: #444; }
+  .demo b, .tok-com { color: #a15c00; }
+  .tok-cmd, .tok-sub { color: #1d5aa7; }
+  .tok-op { color: #b3261e; }
+  .tok-flag { color: #555; }
+}
 td.y { color: #2e9e5b; font-weight: 600; }
 td.n { color: #c05555; }
 td.m { color: var(--accent2); }
