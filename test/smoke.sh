@@ -106,6 +106,19 @@ if command -v zsh >/dev/null 2>&1; then
   check "zsh hook: pin $m1 dir" "p1:$(cd "$work/p1" && jolta home)" "$hook_out"
   check "zsh hook: pin $m2 dir" "p2:$(cd "$work/p2" && jolta home)" "$hook_out"
   check "zsh hook: unmatched pin unsets" "p3:unset" "$hook_out"
+  # mutating jolta state in one shell must reach this one at the next prompt:
+  # 'jolta default' touches .stamp; the precmd sync sees it without any cd
+  sync_out=$(zsh -f -c '
+    export PATH='"$JOLTA_HOME/shims:$bindir"':$PATH
+    export JOLTA_HOME='"$JOLTA_HOME"'
+    eval "$(jolta hook zsh)"
+    cd '"$work"'
+    jolta default '"$m2"' >/dev/null 2>&1
+    _jolta_sync
+    echo "sync:$JAVA_HOME"
+    jolta default '"$m1"' >/dev/null 2>&1
+  ')
+  check "zsh hook: stamp sync picks up default change" "sync:$(cd "$work/p2" && jolta home)" "$sync_out"
 else
   echo "skip zsh hook tests (zsh not found)"
 fi

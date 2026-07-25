@@ -131,7 +131,19 @@ pub fn cmd_reshim() {
         }
     }
     clear_cache();
+    touch_stamp();
     println!("{} {count} shims in {}", ok_mark(), shims.display());
+}
+
+/// Bump $JOLTA_HOME/.stamp so shell hooks notice state changed and refresh
+/// JAVA_HOME + their command cache at the next prompt. Called by everything
+/// mutating (reshim covers install/uninstall/upgrade/setup) plus default/pin.
+fn touch_stamp() {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let _ = fs::write(jolta_home().join(".stamp"), format!("{t}\n"));
 }
 
 fn profile_file() -> PathBuf {
@@ -258,6 +270,7 @@ pub fn cmd_pin(spec: &str) {
         }
     }
     fs::write(".java-version", format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write .java-version: {e}")));
+    touch_stamp();
     let cwd = env::current_dir().unwrap_or_default();
     println!("{} pinned Java {} in {}/.java-version", ok_mark(), bold(spec), cwd.display());
     stale_java_home_hint(resolve(spec).as_deref());
@@ -278,6 +291,7 @@ pub fn cmd_default(spec: &str) {
     }
     let _ = fs::create_dir_all(jolta_home());
     fs::write(jolta_home().join("default"), format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write default: {e}")));
+    touch_stamp();
     println!("{} default Java version set to {}", ok_mark(), bold(spec));
     stale_java_home_hint(resolved.as_deref());
 }
@@ -405,12 +419,16 @@ pub fn cmd_home() {
 }
 
 pub fn cmd_hook(shell: &str) {
+    // Mutating jolta commands touch $JOLTA_HOME/.stamp; the pre-prompt sync
+    // notices (one builtin file read, no fork) and refreshes JAVA_HOME plus
+    // the shell's command cache — so an install/uninstall/default in one
+    // shell can't leave this one running a stale JDK via JAVA_HOME consumers.
     match shell {
         "zsh" => print!(
-            "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _jolta_update_java_home\n_jolta_update_java_home\n"
+            "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  [ \"$_s\" = \"${{_JOLTA_STAMP:-}}\" ] && return\n  _JOLTA_STAMP=$_s\n  rehash\n  _jolta_update_java_home\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _jolta_update_java_home\nadd-zsh-hook precmd _jolta_sync\n_jolta_sync\n_jolta_update_java_home\n"
         ),
         "bash" => print!(
-            "_jolta_update_java_home() {{\n  if [ \"${{_JOLTA_LAST_PWD:-}}\" = \"$PWD\" ]; then return; fi\n  _JOLTA_LAST_PWD=$PWD\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\ncase \";$PROMPT_COMMAND;\" in\n  *\";_jolta_update_java_home;\"*) ;;\n  *) PROMPT_COMMAND=\"_jolta_update_java_home${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\nesac\n_jolta_update_java_home\n"
+            "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  if [ \"$_s\" != \"${{_JOLTA_STAMP:-}}\" ]; then\n    _JOLTA_STAMP=$_s\n    hash -r\n    _JOLTA_LAST_PWD=$PWD\n    _jolta_update_java_home\n    return\n  fi\n  [ \"${{_JOLTA_LAST_PWD:-}}\" = \"$PWD\" ] && return\n  _JOLTA_LAST_PWD=$PWD\n  _jolta_update_java_home\n}}\ncase \";$PROMPT_COMMAND;\" in\n  *\";_jolta_sync;\"*) ;;\n  *) PROMPT_COMMAND=\"_jolta_sync${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\nesac\n_jolta_sync\n"
         ),
         "powershell" | "pwsh" => print!(
             "function global:__jolta_update_java_home {{\n  $jh = & jolta home 2>$null\n  if ($LASTEXITCODE -eq 0 -and $jh) {{ $env:JAVA_HOME = \"$jh\" }}\n  else {{ Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue }}\n}}\n$global:__jolta_prev_prompt = $function:prompt\nfunction global:prompt {{ __jolta_update_java_home; & $global:__jolta_prev_prompt }}\n__jolta_update_java_home\n"
