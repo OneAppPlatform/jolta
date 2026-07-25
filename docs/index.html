@@ -69,6 +69,11 @@ pre { background: #0d1117; border: 1px solid #26313d; color: #c9d5e0; border-rad
 .tok-flag { color: #8b98a5; }
 .tok-op { color: #ff7b72; }
 .tok-com { color: #f0a04b; }
+.codewrap { position: relative; }
+.codewrap pre { padding-right: 44px; }
+.copy { position: absolute; top: 8px; right: 8px; padding: 5px 6px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #8b98a5; cursor: pointer; line-height: 0; opacity: .7; }
+.copy:hover { opacity: 1; color: #c9d5e0; border-color: #8b98a5; }
+.copy.ok, .copy.ok:hover { color: #2e9e5b; opacity: 1; }
 code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 p code, li code, td code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: .08em .35em; font-size: .88em; }
 table { border-collapse: collapse; width: 100%; font-size: .95rem; display: block; overflow-x: auto; }
@@ -85,6 +90,7 @@ footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(-
   .tok-cmd, .tok-sub { color: #1d5aa7; }
   .tok-op { color: #b3261e; }
   .tok-flag { color: #555; }
+  .copy { display: none; }
 }
 td.y { color: #2e9e5b; font-weight: 600; }
 td.n { color: #c05555; }
@@ -97,7 +103,7 @@ td.m { color: var(--accent2); }
 .install-card { border: 1px solid var(--border); border-radius: 10px; padding: 4px 20px 16px; background: var(--hero-bg); }
 .install-card h3 { margin-top: 14px; display: flex; align-items: baseline; gap: 10px; }
 .install-card .arch { font-size: .8rem; font-weight: 400; color: var(--muted); }
-.install-card pre { font-size: .88rem; white-space: pre-wrap; word-break: break-all; }
+.install-card pre { font-size: .8rem; white-space: pre-wrap; word-break: break-all; }
 .install-card p { font-size: .92rem; margin: 10px 0 6px; }
 </style>
 </head>
@@ -366,6 +372,51 @@ document.querySelectorAll('main pre:not(.demo) > code').forEach(function (code) 
     }).join('') + comment;
   }).join('\n');
 });
+
+// Copy-to-clipboard buttons on every command block (the illustrative
+// .demo transcript is skipped — its $-prompts aren't paste-able).
+(function () {
+  var COPY = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>';
+  var CHECK = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg>';
+  document.querySelectorAll('main pre:not(.demo)').forEach(function (pre) {
+    var code = pre.querySelector('code');
+    if (!code) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'codewrap';
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy';
+    btn.title = 'Copy to clipboard';
+    btn.setAttribute('aria-label', 'Copy to clipboard');
+    btn.innerHTML = COPY;
+    btn.addEventListener('click', function () {
+      var text = code.textContent.trim() + '\n';
+      var fallback = function () {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { /* leave ok false */ }
+        document.body.removeChild(ta);
+        return ok ? Promise.resolve() : Promise.reject();
+      };
+      var write = navigator.clipboard && navigator.clipboard.writeText
+        ? navigator.clipboard.writeText(text).catch(fallback)
+        : fallback();
+      write.then(function () {
+        btn.innerHTML = CHECK;
+        btn.classList.add('ok');
+        setTimeout(function () { btn.innerHTML = COPY; btn.classList.remove('ok'); }, 1500);
+      });
+    });
+    wrap.appendChild(btn);
+  });
+})();
 </script>
 
 </body>
