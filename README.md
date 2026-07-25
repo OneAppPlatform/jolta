@@ -130,6 +130,14 @@ jolta install graalvm@25     # explicitly fetch a GraalVM JDK
 
 `jolta list` and `jolta jdks` show the distro of every installed JDK.
 
+**Preferred vendor** — a corretto or liberica shop can make vendorless specs
+lean its way with `jolta vendor corretto` (or the `JOLTA_VENDOR` env var).
+Resolution then prefers that vendor's builds — even over a *higher* build of
+another distro — and vendorless installs and auto-installs fetch it. Explicit
+specs (`temurin@21`, `.sdkmanrc` suffixes) always win; one precedence ladder is
+shared by shims, `which`, `home`, `current`, `list`, and `prune`, so there is
+no command where the preference is honored inconsistently.
+
 ## Keeping JDKs current
 
 Homebrew-style, for the JDKs jolta itself downloaded:
@@ -143,6 +151,8 @@ jolta catalog temurin@21.0   # @v is a prefix filter: every published 21.0.x
 jolta update        # check for newer point releases (alias: jolta outdated)
 jolta upgrade       # upgrade all jolta-managed JDKs, pruning superseded builds
 jolta upgrade 21    # or just one (also corretto@21 etc.)
+jolta prune         # drop superseded builds and stale non-LTS majors
+jolta prune 17      # scoped to one major (also temurin@17); -n previews
 ```
 
 `update` learns the latest point release from the versioned filename in each
@@ -151,6 +161,13 @@ switches resolution to it (pins are majors, so nothing else changes), and
 removes the superseded install. JDKs from Homebrew/system packages are left to
 their own package managers — since resolution always picks the highest build of
 a major, a `brew upgrade`d JDK takes effect automatically.
+
+`prune` goes further than upgrade's cleanup: it also removes entire majors that
+are non-LTS, superseded by a higher installed major, and not the current
+feature release. Both prune paths are **pin-aware**: jolta remembers every
+project pin it has resolved and re-reads those files live, so a build that any
+`.java-version` or `.sdkmanrc` still references is kept (`kept temurin-21.0.1
+(pinned by /work/api/.java-version)`) — pruning never breaks a project.
 
 ## Where JDKs come from
 
@@ -204,6 +221,8 @@ jolta install corretto@21  # or another distro
 | `jolta upgrade [spec]` | Upgrade jolta-managed JDKs, pruning old builds |
 | `jolta jdks` | Machine-readable list: `major`/`version`/`distro`/`home` |
 | `jolta uninstall <name>` | Remove a jolta-managed JDK |
+| `jolta prune [spec] [-n]` | Remove superseded builds + stale non-LTS majors; pins protect |
+| `jolta vendor [name]` | Show/set the preferred distro for vendorless specs |
 | `jolta list` | List visible JDKs, star the active one |
 | `jolta current` | Show the version resolved here, and why |
 | `jolta which [tool]` | Full path the shim would exec |

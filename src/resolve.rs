@@ -24,14 +24,23 @@ pub fn best_match(
     vendor: Option<&str>,
     major: u32,
     version: &str,
+    preferred: Option<&str>,
 ) -> Option<PathBuf> {
-    // Pins ending in -ea accept only EA builds; GA pins prefer GA and fall
-    // back to EA only when nothing else provides the major (mise #6907:
-    // never satisfy an EA request silently with a GA build or vice versa).
+    // Precedence for vendorless specs, ONE ladder shared by every consumer
+    // (shims, which/home/current, list, prune, auto-install):
+    //   preferred-vendor GA > any GA > preferred-vendor EA > any EA,
+    // highest build within each tier. The preferred vendor beats even a
+    // HIGHER build of another vendor — a corretto shop pinning "11" gets
+    // corretto 11.0.31 over temurin 11.0.32. Explicit spec vendors filter
+    // hard and make the preference irrelevant. EA gates as before
+    // (mise #6907: never satisfy an EA request with GA or vice versa).
     let want_ea = version.contains("-ea");
-    let mut best: Option<(u64, &PathBuf)> = None; // GA candidates
+    let mut best: Option<(u64, &PathBuf)> = None; // GA, any vendor
+    let mut best_pref: Option<(u64, &PathBuf)> = None; // GA, preferred vendor
     let mut best_ea: Option<(u64, &PathBuf)> = None;
+    let mut best_pref_ea: Option<(u64, &PathBuf)> = None;
     let mut exact: Option<&PathBuf> = None;
+    let mut exact_pref: Option<&PathBuf> = None;
     for (v, home) in candidates {
         if major_of(v) != Some(major) {
             continue;
@@ -45,13 +54,24 @@ pub fn best_match(
         if want_ea && !is_ea {
             continue;
         }
+        let is_pref = vendor.is_none() && preferred.is_some() && vendor_of(home) == preferred;
         // Exact matches compare numerically, so "21.0.2+13" == "21.0.2" and
         // "21.0.0" == "21" (vendors publish both notations, mise #839/#2726).
-        if exact.is_none() && numkey(v) == numkey(version) {
-            exact = Some(home);
+        if numkey(v) == numkey(version) {
+            if is_pref && exact_pref.is_none() {
+                exact_pref = Some(home);
+            }
+            if exact.is_none() {
+                exact = Some(home);
+            }
         }
         let k = numkey(v);
-        let slot = if is_ea { &mut best_ea } else { &mut best };
+        let slot = match (is_pref, is_ea) {
+            (true, false) => &mut best_pref,
+            (false, false) => &mut best,
+            (true, true) => &mut best_pref_ea,
+            (false, true) => &mut best_ea,
+        };
         // strict >: ties keep the EARLIER candidate — managed JDKs come first
         // in `candidates`, so a managed JDK beats a same-version system one
         if slot.map_or(true, |(bk, _)| k > bk) {
@@ -60,11 +80,11 @@ pub fn best_match(
     }
     // An exact spec means exact: never satisfy "21.0.2" with some other 21.x
     if is_exact(version) {
-        return exact.cloned();
+        return exact_pref.or(exact).cloned();
     }
-    // A major pin picks the highest build; the bare-GA "21" release that
-    // happens to string-match the pin must not shadow 21.0.x (mise #1887).
-    best.or(best_ea).map(|(_, h)| h.clone())
+    // A major pin picks the highest build within the winning tier; the
+    // bare-GA "21" release must not shadow 21.0.x (mise #1887).
+    best_pref.or(best).or(best_pref_ea).or(best_ea).map(|(_, h)| h.clone())
 }
 
 fn cache_path(spec: &str) -> PathBuf {
@@ -72,7 +92,10 @@ fn cache_path(spec: &str) -> PathBuf {
         .chars()
         .map(|c| if c == '/' || c == ' ' { '_' } else { c })
         .collect();
-    jolta_home().join("cache").join(format!("v-{safe}"))
+    // the preference changes what a vendorless spec resolves to, so it is
+    // part of the cache key — else toggling JOLTA_VENDOR serves stale answers
+    let pref = crate::jdk::preferred_vendor().map(|v| format!("-p-{v}")).unwrap_or_default();
+    jolta_home().join("cache").join(format!("v-{safe}{pref}"))
 }
 
 pub fn clear_cache() {
@@ -97,7 +120,7 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
         }
         let _ = fs::remove_file(&cache);
     }
-    let home = best_match(&list_all(), vendor, major, &version)?;
+    let home = best_match(&list_all(), vendor, major, &version, crate::jdk::preferred_vendor())?;
     if !has_java(&home) {
         return None;
     }
@@ -144,6 +167,75 @@ fn parse_sdkmanrc(text: &str) -> Option<String> {
 pub struct Pin {
     pub spec: Option<String>,
     pub source: String,
+}
+
+fn pin_key(path: &str) -> String {
+    let mut h: u64 = 5381;
+    for b in path.bytes() {
+        h = h.wrapping_mul(33) ^ b as u64;
+    }
+    format!("{h:016x}")
+}
+
+/// Remember file pins ($JOLTA_HOME/pins/, one entry per pin file) so prune
+/// can protect exact-pinned builds. Refreshed only when changed — the happy
+/// path costs one small read.
+fn remember_pin(source: &str, spec: &str) {
+    if !(source.starts_with('/') || source.get(1..3) == Some(":\\")) {
+        return; // env-var / default sources aren't files
+    }
+    let f = jolta_home().join("pins").join(pin_key(source));
+    let entry = format!("{source}\n{spec}\n");
+    if fs::read_to_string(&f).is_ok_and(|cur| cur == entry) {
+        return;
+    }
+    let _ = fs::create_dir_all(jolta_home().join("pins"));
+    let _ = fs::write(&f, entry);
+}
+
+/// Live (spec, pin-file-path) pairs from every remembered pin. The registry
+/// is only a hint: each pin file is re-read NOW, and entries whose file is
+/// gone or no longer pins anything are dropped.
+pub fn remembered_pin_specs() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(jolta_home().join("pins")) else { return out };
+    for e in entries.flatten() {
+        let Some(path) = fs::read_to_string(e.path())
+            .ok()
+            .and_then(|t| t.lines().next().map(str::to_string))
+        else {
+            let _ = fs::remove_file(e.path());
+            continue;
+        };
+        let spec = fs::read_to_string(&path).ok().and_then(|text| {
+            if path.ends_with(".sdkmanrc") {
+                parse_sdkmanrc(&text)
+            } else {
+                first_spec_line(&text)
+            }
+        });
+        match spec {
+            Some(s) => out.push((s, path)),
+            None => {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+    out
+}
+
+/// Does this pin spec protect an installed (vendor, version) build from
+/// pruning? Only exact pins do — a major pin resolves to the newest build
+/// anyway, which prune always keeps.
+pub fn pin_protects(spec: &str, vendor: &str, version: &str) -> bool {
+    let (pin_vendor, pin_version) = parse_spec(spec);
+    if !is_exact(&pin_version) {
+        return false;
+    }
+    if pin_vendor.is_some_and(|pv| pv != vendor) {
+        return false;
+    }
+    numkey(&pin_version) == numkey(version) && major_of(&pin_version) == major_of(version)
 }
 
 /// First spec token of a version file: skips blank and `#`-comment lines,
@@ -224,7 +316,10 @@ fn try_auto_install(spec: &str) -> bool {
     let Some(major) = major_of(&version) else { return false };
     // Vendorless spec: stay with a vendor that already provides this major
     // (a corretto shop pinning "21.0.9" should not silently gain a temurin).
+    // Order: explicit spec > configured preference > vendor already providing
+    // this major > temurin.
     let vendor = vendor
+        .or_else(|| crate::jdk::preferred_vendor().filter(|v| INSTALLABLE_VENDORS.contains(v)))
         .or_else(|| {
             list_all()
                 .iter()
@@ -263,6 +358,9 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
             if home.is_none() && auto_install && try_auto_install(&spec) {
                 home = resolve(&spec);
             }
+            if home.is_some() {
+                remember_pin(&pin.source, &spec);
+            }
             let home = home.unwrap_or_else(|| {
                 let installed: Vec<String> = {
                     let mut vs: Vec<String> = list_all()
@@ -295,12 +393,13 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
             if auto_install && env::var("JOLTA_NO_AUTO_INSTALL").is_err() {
                 let major = release_universe().map_or(FALLBACK_LTS, |(_, _, lts, _)| lts);
                 let spec = major.to_string();
+                let vendor = crate::jdk::default_vendor();
                 eprintln!(
-                    "{} no Java pinned and none installed — fetching Temurin {major} (latest LTS) and setting it as your default {}",
+                    "{} no Java pinned and none installed — fetching {vendor} {major} (latest LTS) and setting it as your default {}",
                     paint("33", "jolta:", true),
                     paint("2", "(set JOLTA_NO_AUTO_INSTALL=1 to disable)", true)
                 );
-                if install_vendor_spec("temurin", &spec).is_ok() {
+                if install_vendor_spec(vendor, &spec).is_ok() {
                     let _ = fs::create_dir_all(jolta_home());
                     let _ = fs::write(jolta_home().join("default"), format!("{spec}\n"));
                     if let Some(home) = resolve(&spec) {
@@ -351,5 +450,61 @@ mod tests {
     #[test]
     fn sdkmanrc_unknown_suffix_is_vendorless() {
         assert_eq!(parse_sdkmanrc("java=21.0.4-wibble\n"), Some("21.0.4".into()));
+    }
+}
+
+#[cfg(test)]
+mod precedence_tests {
+    use super::*;
+
+    fn fake(name: &str, implementor: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jolta-prec-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("release"), format!("IMPLEMENTOR=\"{implementor}\"\n")).unwrap();
+        dir
+    }
+
+    /// The user's example verbatim: preferred-vendor 11.0.31 beats another
+    /// vendor's 11.0.32; without a preference the higher build wins.
+    #[test]
+    fn preferred_vendor_beats_higher_version() {
+        let corretto = fake("corretto-11.0.31", "Amazon.com Inc.");
+        let temurin = fake("temurin-11.0.32", "Eclipse Adoptium");
+        let candidates = vec![
+            ("11.0.31".to_string(), corretto.clone()),
+            ("11.0.32".to_string(), temurin.clone()),
+        ];
+        assert_eq!(best_match(&candidates, None, 11, "11", Some("corretto")), Some(corretto.clone()));
+        assert_eq!(best_match(&candidates, None, 11, "11", None), Some(temurin.clone()));
+        // explicit spec vendor overrides the preference entirely
+        assert_eq!(best_match(&candidates, Some("temurin"), 11, "11", Some("corretto")), Some(temurin.clone()));
+        // preference for a vendor with no candidates falls back to highest
+        assert_eq!(best_match(&candidates, None, 11, "11", Some("zulu")), Some(temurin.clone()));
+        let _ = fs::remove_dir_all(&corretto);
+        let _ = fs::remove_dir_all(&temurin);
+    }
+
+    #[test]
+    fn preferred_vendor_wins_exact_ties() {
+        let corretto = fake("corretto-17.0.9", "Amazon.com Inc.");
+        let temurin = fake("temurin-17.0.9", "Eclipse Adoptium");
+        let candidates = vec![
+            ("17.0.9".to_string(), temurin.clone()),
+            ("17.0.9".to_string(), corretto.clone()),
+        ];
+        assert_eq!(best_match(&candidates, None, 17, "17.0.9", Some("corretto")), Some(corretto.clone()));
+        let _ = fs::remove_dir_all(&corretto);
+        let _ = fs::remove_dir_all(&temurin);
+    }
+
+    #[test]
+    fn pin_protection_rules() {
+        assert!(pin_protects("21.0.1", "temurin", "21.0.1"));
+        assert!(pin_protects("temurin@21.0.1", "temurin", "21.0.1"));
+        assert!(pin_protects("21.0.1+9", "temurin", "21.0.1"));
+        assert!(!pin_protects("corretto@21.0.1", "temurin", "21.0.1")); // other vendor
+        assert!(!pin_protects("21", "temurin", "21.0.1")); // major pins don't protect old builds
+        assert!(!pin_protects("21.0.2", "temurin", "21.0.1"));
     }
 }

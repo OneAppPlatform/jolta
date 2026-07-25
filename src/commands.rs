@@ -33,6 +33,9 @@ pub fn usage() {
     row("update, outdated", "Check jolta-managed JDKs for newer point releases");
     row("upgrade [spec]", "Upgrade jolta-managed JDKs (all, or one: 21, corretto@21)");
     row("uninstall <spec>", "Remove a jolta-managed JDK (25, temurin@25, or a full name)");
+    row("prune [spec] [-n]", "Remove superseded builds and stale non-LTS majors");
+    cont("keeps anything a project pin references; -n / --dry-run previews");
+    row("vendor [name]", "Show or set the preferred distro for vendorless specs");
     row("list, ls", "List installed JDKs and where they come from");
     row("catalog [x]", "The JDK catalog: latest per distro, per-major, or per-distro");
     cont("(@v filters: temurin@21 all 21.x, temurin@21.0 all 21.0.x)");
@@ -264,7 +267,7 @@ pub fn cmd_pin(spec: &str) {
     }
     if resolve(spec).is_none() {
         let (vendor, version) = parse_spec(spec);
-        let vendor = vendor.unwrap_or("temurin");
+        let vendor = vendor.unwrap_or_else(crate::jdk::default_vendor);
         if env::var("JOLTA_NO_AUTO_INSTALL").is_err()
             && INSTALLABLE_VENDORS.contains(&vendor)
             && major_of(&version).is_some()
@@ -463,7 +466,7 @@ pub fn cmd_hook(shell: &str) {
 
 pub fn cmd_install(spec: &str) {
     let (vendor, version) = parse_spec(spec);
-    let vendor = vendor.unwrap_or("temurin");
+    let vendor = vendor.unwrap_or_else(crate::jdk::default_vendor);
     major_of(&version)
         .unwrap_or_else(|| die(&format!("cannot parse version '{spec}' (try e.g. 21, 21.0.2, or corretto@21)")));
     if install_vendor_spec(vendor, &version).is_err() {
@@ -812,7 +815,7 @@ pub fn cmd_upgrade(spec: Option<&str>) {
     let targets: Vec<(String, u32, String)> = match spec {
         Some(s) => {
             let (vendor, version) = parse_spec(s);
-            let vendor = vendor.unwrap_or("temurin");
+            let vendor = vendor.unwrap_or_else(crate::jdk::default_vendor);
             let major = major_of(&version)
                 .unwrap_or_else(|| die(&format!("cannot parse '{s}' (try e.g. 21 or corretto@21)")));
             match managed.into_iter().find(|(v, m, _)| v == vendor && *m == major) {
@@ -940,6 +943,151 @@ pub fn cmd_uninstall(name: &str) {
     // Drop shims for vendor-specific extras (gu, native-image, ...) that no
     // remaining JDK provides; the baseline set always survives.
     cmd_reshim();
+}
+
+/// jolta vendor [name|--unset]: the preferred distro for vendorless specs.
+/// Resolution prefers this vendor's builds (even over higher builds of other
+/// vendors) and vendorless installs fetch it; explicit specs always win.
+pub fn cmd_vendor(rest: &[String]) {
+    let f = jolta_home().join("vendor");
+    match rest.first().map(String::as_str) {
+        None => match crate::jdk::preferred_vendor() {
+            Some(v) => println!("{}", v),
+            None => println!("{}", dim("(no preferred vendor set — vendorless specs pick the highest build, install defaults to temurin)")),
+        },
+        Some("--unset") => {
+            let _ = fs::remove_file(&f);
+            touch_stamp();
+            println!("{} preferred vendor cleared", ok_mark());
+        }
+        Some(name) => {
+            let name = name.to_ascii_lowercase();
+            if !KNOWN_VENDORS.contains(&name.as_str()) {
+                die(&format!("unknown vendor '{name}' (known: {})", KNOWN_VENDORS.join(", ")));
+            }
+            let _ = fs::create_dir_all(jolta_home());
+            fs::write(&f, format!("{name}\n")).unwrap_or_else(|e| die(&format!("cannot write {}: {e}", f.display())));
+            clear_cache();
+            touch_stamp();
+            if !INSTALLABLE_VENDORS.contains(&name.as_str()) {
+                eprintln!(
+                    "{} '{name}' is matched but not downloadable — vendorless installs will still fetch temurin",
+                    paint("33", "jolta: note:", true)
+                );
+            }
+            println!("{} preferred vendor set to {}", ok_mark(), bold(&name));
+        }
+    }
+}
+
+/// jolta prune [spec] [--dry-run]: two tiers, both respecting remembered
+/// pins (re-read live from the projects' own files):
+///   1. within each vendor+major, keep the newest build; drop older ones
+///      unless a pin exact-references them
+///   2. drop entire majors that are non-LTS, not the current feature
+///      release, and not the vendor's newest — unless some pin references
+///      that major
+/// A spec argument (17, temurin@17) scopes both tiers.
+pub fn cmd_prune(rest: &[String]) {
+    let dry = rest.iter().any(|a| a == "--dry-run" || a == "-n");
+    let scope = rest.iter().find(|a| !a.starts_with('-')).map(|s| {
+        let (v, ver) = parse_spec(s);
+        match major_of(&ver) {
+            Some(m) => (v, m),
+            None => die(&format!("cannot parse '{s}' (try e.g. 17 or temurin@17)")),
+        }
+    });
+    let pins = crate::resolve::remembered_pin_specs();
+    // group managed builds by (vendor, major) from install-dir names
+    let jdks_dir = jolta_home().join("jdks");
+    let mut groups: Vec<((String, u32), Vec<(String, String)>)> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&jdks_dir) {
+        let mut names: Vec<String> =
+            entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        for name in names {
+            let Some((vendor, full)) = name.split_once('-') else { continue };
+            if !KNOWN_VENDORS.contains(&vendor) {
+                continue;
+            }
+            let Some(major) = major_of(full) else { continue };
+            let key = (vendor.to_string(), major);
+            match groups.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, v)) => v.push((full.to_string(), name.clone())),
+                None => groups.push((key, vec![(full.to_string(), name.clone())])),
+            }
+        }
+    }
+    if groups.is_empty() {
+        println!("nothing to prune {}", dim("(no jolta-managed JDKs)"));
+        return;
+    }
+    // LTS/current knowledge: vendor metadata (or mirror), else the known train
+    let (lts_set, feature) = match release_universe() {
+        Some((_, lts, _, feature)) => (lts, Some(feature)),
+        None => (vec![8, 11, 17, 21, 25], None),
+    };
+    // a vendor's newest installed major always survives tier 2
+    let mut newest_major: Vec<(String, u32)> = Vec::new();
+    for ((v, m), _) in &groups {
+        match newest_major.iter_mut().find(|(nv, _)| nv == v) {
+            Some((_, nm)) => *nm = (*nm).max(*m),
+            None => newest_major.push((v.clone(), *m)),
+        }
+    }
+    fn prune_one(name: &str, why: &str, dry: bool, removed: &mut u32) {
+        if dry {
+            println!("  would prune {name} {}", dim(&format!("({why})")));
+        } else if fs::remove_dir_all(jolta_home().join("jdks").join(name)).is_ok() {
+            println!("  {} pruned {name} {}", ok_mark(), dim(&format!("({why})")));
+        }
+        *removed += 1;
+    }
+    let mut removed = 0u32;
+    for ((vendor, major), mut builds) in groups {
+        if scope.as_ref().is_some_and(|(sv, sm)| *sm != major || sv.is_some_and(|s| s != vendor)) {
+            continue;
+        }
+        builds.sort_by_key(|(full, _)| std::cmp::Reverse(numkey(full)));
+        let is_lts = lts_set.contains(&major);
+        let is_current = feature == Some(major)
+            || newest_major.iter().any(|(v, m)| *v == vendor && *m == major);
+        let major_pin = pins.iter().find(|(spec, _)| {
+            let (pv, ver) = parse_spec(spec);
+            major_of(&ver) == Some(major) && pv.map_or(true, |p| p == vendor)
+        });
+        if !is_lts && !is_current {
+            match major_pin {
+                Some((_, src)) => println!(
+                    "  {} kept {vendor} {major} {}",
+                    ok_mark(),
+                    dim(&format!("(non-LTS, but pinned by {src})"))
+                ),
+                None => {
+                    for (_, name) in &builds {
+                        prune_one(name, &format!("non-LTS {major}, higher major installed"), dry, &mut removed);
+                    }
+                    continue;
+                }
+            }
+        }
+        for (full, name) in &builds[1..] {
+            if let Some((_, src)) = pins.iter().find(|(spec, _)| crate::resolve::pin_protects(spec, &vendor, full)) {
+                println!("  {} kept {name} {}", ok_mark(), dim(&format!("(pinned by {src})")));
+            } else {
+                prune_one(name, "superseded", dry, &mut removed);
+            }
+        }
+    }
+    if removed == 0 {
+        println!("{} nothing to prune", ok_mark());
+    } else if dry {
+        println!("{removed} to prune — run without --dry-run to remove");
+    } else {
+        clear_cache();
+        cmd_reshim();
+        println!("{} pruned {removed} JDK build(s)", ok_mark());
+    }
 }
 
 pub fn cmd_implode(args: &[String]) {
@@ -1156,6 +1304,9 @@ pub fn cmd_doctor() -> i32 {
     match pin.spec {
         Some(s) => println!("  pin here:      '{}' via {}", bold(&s), pin.source),
         None => println!("  pin here:      none (system default JDK will be used)"),
+    }
+    if let Some(v) = crate::jdk::preferred_vendor() {
+        println!("  vendor:        {v} preferred (vendorless specs pick it first)");
     }
     rc
 }

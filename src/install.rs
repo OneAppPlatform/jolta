@@ -624,13 +624,20 @@ pub fn probe_latest(vendor: &str, major: u32) -> bool {
 }
 
 /// Remove jolta-managed installs of this distro+major other than `keep`.
+/// Builds that a remembered pin still exact-references are kept — upgrading
+/// must never break a project pinned to the superseded build.
 pub fn prune_superseded(vendor: &str, major: u32, keep: &str) {
+    let pins = crate::resolve::remembered_pin_specs();
     let jdks = jolta_home().join("jdks");
     let Ok(entries) = fs::read_dir(&jdks) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let Some(full) = name.strip_prefix(&format!("{vendor}-")) else { continue };
         if full != keep && crate::jdk::major_of(full) == Some(major) {
+            if let Some((_, src)) = pins.iter().find(|(s, _)| crate::resolve::pin_protects(s, vendor, full)) {
+                println!("  {} kept {name} {}", ok_mark(), dim(&format!("(pinned by {src})")));
+                continue;
+            }
             if fs::remove_dir_all(entry.path()).is_ok() {
                 println!("  {} pruned {name}", ok_mark());
             }
@@ -687,7 +694,7 @@ pub fn cmd_mirror(rest: &[String]) {
 fn mirror_sync(args: &[String]) {
     let mut dir: Option<PathBuf> = None;
     let mut from: Option<String> = None;
-    let mut vendors: Vec<String> = vec!["temurin".into()];
+    let mut vendors: Vec<String> = vec![crate::jdk::default_vendor().to_string()];
     let mut majors: Vec<u32> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {

@@ -1286,6 +1286,126 @@ jolta_rc jolta home
 check_rc "graalce: does not satisfy a graalvm (Oracle) pin" nonzero "$rc"
 
 # =================================================================
+section "O. preferred vendor & prune"
+# =================================================================
+
+# jolta vendor: show / set / unknown / unset
+jolta_rc jolta vendor
+check_rc "vendor with nothing set exits 0" 0 "$rc"
+jolta_rc jolta vendor nosuchvendor
+check_rc "vendor rejects unknown names" nonzero "$rc"
+jolta vendor corretto >/dev/null 2>&1
+check_eq "vendor shows the setting" "corretto" "$(jolta vendor 2>/dev/null)"
+jolta vendor --unset >/dev/null 2>&1
+
+# the example verbatim: preferred vendor's build beats a HIGHER build
+mk_jdk corretto-68.0.1 68.0.1 "Amazon.com Inc."
+mk_jdk temurin-68.0.2  68.0.2 "Eclipse Adoptium"
+mkdir -p "$work/o1" && cd "$work/o1"
+echo 68 > .java-version
+check "no preference: highest build wins" "temurin-68.0.2" "$(jolta home 2>/dev/null)"
+check "JOLTA_VENDOR=corretto beats the higher build" "corretto-68.0.1" \
+  "$(JOLTA_VENDOR=corretto jolta home 2>/dev/null)"
+echo temurin@68 > .java-version
+check "explicit spec vendor overrides the preference" "temurin-68.0.2" \
+  "$(JOLTA_VENDOR=corretto jolta home 2>/dev/null)"
+echo 68 > .java-version
+jolta vendor corretto >/dev/null 2>&1
+check "persisted preference applies" "corretto-68.0.1" "$(jolta home 2>/dev/null)"
+jolta vendor --unset >/dev/null 2>&1
+check "unset restores highest-build behavior" "temurin-68.0.2" "$(jolta home 2>/dev/null)"
+
+# vendorless auto-install fetches the preferred vendor
+publish corretto 66 66.0.1
+mkdir -p "$work/o2" && cd "$work/o2"
+echo 66 > .java-version
+out=$(env -u JOLTA_NO_AUTO_INSTALL JOLTA_VENDOR=corretto JOLTA_DOWNLOAD_BASE="file://$mirror" java 2>&1); rc=$?
+check_rc "preferred-vendor auto-install succeeds" 0 "$rc"
+[ -d "$JOLTA_HOME/jdks/corretto-66.0.1" ] \
+  && ok "auto-install fetched the preferred vendor" \
+  || bad "auto-install fetched the preferred vendor" "     $(ls -d "$JOLTA_HOME"/jdks/*66* 2>/dev/null)"
+jolta uninstall corretto-66.0.1 >/dev/null 2>&1
+
+# upgrade's auto-prune keeps exact-pinned builds
+publish temurin 79 79.0.1
+env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 79 >/dev/null 2>&1
+mkdir -p "$work/o3" && cd "$work/o3"
+echo 79.0.1 > .java-version
+jolta home >/dev/null 2>&1                 # remember the pin
+printf '79.0.2\n' > "$mirror/temurin/79/latest"
+publish temurin 79 79.0.2
+out=$(env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta upgrade 79 2>&1)
+check "upgrade keeps the pinned superseded build" "kept temurin-79.0.1" "$out"
+[ -d "$JOLTA_HOME/jdks/temurin-79.0.1" ] && [ -d "$JOLTA_HOME/jdks/temurin-79.0.2" ] \
+  && ok "pinned build survived the upgrade prune" \
+  || bad "pinned build survived the upgrade prune" "     $(ls -d "$JOLTA_HOME"/jdks/temurin-79* 2>/dev/null)"
+jolta uninstall temurin-79.0.2 >/dev/null 2>&1
+jolta uninstall temurin-79.0.1 >/dev/null 2>&1
+rm "$work/o3/.java-version"
+
+# jolta prune: two tiers, pin-aware, in an isolated home with mirror LTS=21
+prunehome="$work/prunehome"; prunemirror="$work/prunemirror"
+mkdir -p "$prunehome/jdks" "$prunemirror"
+echo 21 > "$prunemirror/lts"
+(
+  export JOLTA_HOME="$prunehome" JOLTA_DOWNLOAD_BASE="file://$prunemirror"
+  mk_jdk temurin-21.0.1  21.0.1 "Eclipse Adoptium"
+  mk_jdk temurin-21.0.9  21.0.9 "Eclipse Adoptium"
+  mk_jdk corretto-21.0.1 21.0.1 "Amazon.com Inc."
+  mk_jdk temurin-22.0.1  22.0.1 "Eclipse Adoptium"
+  mk_jdk temurin-24.0.1  24.0.1 "Eclipse Adoptium"
+  mk_jdk temurin-20.0.1  20.0.1 "Eclipse Adoptium"
+  mk_jdk temurin-20.0.5  20.0.5 "Eclipse Adoptium"
+  mkdir -p "$work/o4" && cd "$work/o4"
+  echo 20.0.1 > .java-version
+  jolta home >/dev/null 2>&1               # remember the exact pin
+
+  out=$(jolta prune --dry-run 2>&1); rc=$?
+  check_rc "prune --dry-run exits 0" 0 "$rc"
+  check "dry-run previews the superseded build" "would prune temurin-21.0.1" "$out"
+  [ -d "$prunehome/jdks/temurin-21.0.1" ] \
+    && ok "dry-run removes nothing" \
+    || bad "dry-run removes nothing" "     temurin-21.0.1 gone after dry-run"
+
+  out=$(jolta prune 2>&1)
+  [ ! -d "$prunehome/jdks/temurin-21.0.1" ] \
+    && ok "prune drops the superseded LTS build" \
+    || bad "prune drops the superseded LTS build" "     still present"
+  [ -d "$prunehome/jdks/temurin-21.0.9" ] && [ -d "$prunehome/jdks/corretto-21.0.1" ] \
+    && ok "prune keeps each vendor's newest build" \
+    || bad "prune keeps each vendor's newest build" "     $(ls "$prunehome/jdks")"
+  [ ! -d "$prunehome/jdks/temurin-22.0.1" ] \
+    && ok "prune drops a stale non-LTS major (22)" \
+    || bad "prune drops a stale non-LTS major (22)" "     still present"
+  [ -d "$prunehome/jdks/temurin-24.0.1" ] \
+    && ok "prune keeps the vendor's newest major (24)" \
+    || bad "prune keeps the vendor's newest major (24)" "     removed!"
+  check "pinned major reported as kept" "pinned by $work/o4/.java-version" "$out"
+  [ -d "$prunehome/jdks/temurin-20.0.1" ] && [ -d "$prunehome/jdks/temurin-20.0.5" ] \
+    && ok "pin protects its non-LTS major (20)" \
+    || bad "pin protects its non-LTS major (20)" "     $(ls "$prunehome/jdks")"
+
+  rm "$work/o4/.java-version"
+  jolta prune >/dev/null 2>&1
+  [ ! -d "$prunehome/jdks/temurin-20.0.1" ] && [ ! -d "$prunehome/jdks/temurin-20.0.5" ] \
+    && ok "unpinning releases the major to pruning" \
+    || bad "unpinning releases the major to pruning" "     $(ls "$prunehome/jdks")"
+
+  mk_jdk temurin-22.0.1 22.0.1 "Eclipse Adoptium"
+  mk_jdk temurin-21.0.1 21.0.1 "Eclipse Adoptium"
+  jolta prune 21 >/dev/null 2>&1
+  [ ! -d "$prunehome/jdks/temurin-21.0.1" ] && [ -d "$prunehome/jdks/temurin-22.0.1" ] \
+    && ok "scoped prune touches only its major" \
+    || bad "scoped prune touches only its major" "     $(ls "$prunehome/jdks")"
+
+  echo "$pass $fail" > "$work/o-counts"
+  printf '%s' "$failed_names" > "$work/o-fails"
+)
+read -r pass fail < "$work/o-counts"
+failed_names=$(cat "$work/o-fails")
+cd "$work"
+
+# =================================================================
 section "M. mirror metadata, sync & verify"
 # =================================================================
 

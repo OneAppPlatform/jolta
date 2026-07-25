@@ -105,6 +105,24 @@ pub fn version_from_name(dir: &Path) -> Option<String> {
     if v.is_empty() { None } else { Some(v) }
 }
 
+/// The user's preferred vendor, if configured: JOLTA_VENDOR env var, then
+/// the $JOLTA_HOME/vendor file (written by `jolta vendor <name>`). Unknown
+/// names are ignored rather than fatal — resolution must never die over a
+/// stale preference.
+pub fn preferred_vendor() -> Option<&'static str> {
+    let name = std::env::var("JOLTA_VENDOR")
+        .ok()
+        .or_else(|| fs::read_to_string(jolta_home().join("vendor")).ok())?;
+    let name = name.trim().to_ascii_lowercase();
+    KNOWN_VENDORS.iter().find(|v| **v == name).copied()
+}
+
+/// Default vendor for vendorless installs: the preference when it names a
+/// downloadable distro, else temurin.
+pub fn default_vendor() -> &'static str {
+    preferred_vendor().filter(|v| INSTALLABLE_VENDORS.contains(v)).unwrap_or("temurin")
+}
+
 /// Map an sdkman-style vendor suffix ("8.0.392-tem" dirs, "-tem" in
 /// .sdkmanrc) to a jolta vendor name. Empty for unknown suffixes.
 pub fn sdkman_suffix_vendor(suffix: &str) -> &'static str {

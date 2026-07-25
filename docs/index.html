@@ -279,6 +279,8 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td><code>jolta update</code></td><td>Check jolta-managed JDKs for newer point releases</td></tr>
 <tr><td><code>jolta upgrade [spec]</code></td><td>Upgrade jolta-managed JDKs, pruning old builds</td></tr>
 <tr><td><code>jolta uninstall &lt;name&gt;</code></td><td>Remove a jolta-managed JDK</td></tr>
+<tr><td><code>jolta prune [spec]</code></td><td>Remove superseded builds and stale non-LTS majors — anything a project pin references is kept</td></tr>
+<tr><td><code>jolta vendor [name]</code></td><td>Preferred distro for vendorless specs (beats even higher builds of other distros)</td></tr>
 <tr><td><code>jolta list</code></td><td>List visible JDKs with distro, star the active one</td></tr>
 <tr><td><code>jolta jdks</code></td><td>Machine-readable list: major / version / distro / home</td></tr>
 <tr><td><code>jolta current</code></td><td>Show the version resolved here, and why</td></tr>
@@ -325,6 +327,8 @@ scripts and CI, use <code>jolta exec mvn ...</code> or
 <tr><td>Builds &amp; verifies the mirror for you (<code>mirror sync</code>)</td>
   <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
 <tr><td>Air-gapped updates &amp; catalog (mirror metadata)</td>
+  <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
+<tr><td>Pruning that never breaks a pinned project</td>
   <td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
 <tr><td>Also manages Maven/Gradle/other tools</td>
   <td class="n">✗</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td></tr>
