@@ -61,37 +61,3 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: gh release upload "$GITHUB_REF_NAME" jolta-${{ matrix.target }}.* --clobber
-
-  # Keep the Homebrew tap in lockstep with the release: rewrite the formula's
-  # version and per-target sha256s. Needs a TAP_TOKEN repo secret (fine-grained
-  # PAT with contents:write on OneAppPlatform/homebrew-tap); skipped when absent
-  # — the tap then needs a manual bump, which is how it drifted to 9 versions
-  # stale once already.
-  update-tap:
-    needs: build
-    runs-on: ubuntu-latest
-    env:
-      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
-    steps:
-      - name: Update Homebrew formula
-        if: env.TAP_TOKEN != ''
-        env:
-          GH_TOKEN: ${{ env.TAP_TOKEN }}
-        run: |
-          set -eu
-          ver="${GITHUB_REF_NAME#v}"
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/OneAppPlatform/homebrew-tap" tap
-          cd tap
-          sed -i "s/^  version \".*\"/  version \"$ver\"/" Formula/jolta.rb
-          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
-            curl -fsSL -o asset.tar.gz \
-              "https://github.com/OneAppPlatform/jolta/releases/download/${GITHUB_REF_NAME}/jolta-${target}.tar.gz"
-            sha=$(sha256sum asset.tar.gz | cut -d' ' -f1)
-            # replace the sha256 on the line following this target's url line
-            sed -i "/jolta-${target}\.tar\.gz\"/{n;s/sha256 \".*\"/sha256 \"${sha}\"/;}" Formula/jolta.rb
-          done
-          rm -f asset.tar.gz
-          git config user.name "jolta-release-bot"
-          git config user.email "noreply@github.com"
-          git add Formula/jolta.rb
-          git commit -m "jolta ${ver}" && git push || echo "tap already current"
