@@ -1,0 +1,65 @@
+:root {
+  --bg: #ffffff; --fg: #1c2733; --muted: #5b6b7b; --accent: #1d5aa7;
+  --accent2: #e8871e; --code-bg: #f4f6f8; --border: #e3e8ee; --hero-bg: #f8fafc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10161d; --fg: #dfe7ef; --muted: #93a3b3; --accent: #6aa9e8;
+    --accent2: #f0a04b; --code-bg: #1a222c; --border: #26313d; --hero-bg: #141c25;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 17px/1.65 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--fg); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+header.hero { background: var(--hero-bg); border-bottom: 1px solid var(--border); padding: 56px 0 40px; text-align: center; }
+.hero img { max-width: 420px; width: 90%; height: auto; border-radius: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+.hero p.tag { font-size: 1.25rem; color: var(--muted); margin: 18px auto 8px; max-width: 560px; }
+nav.toc { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--border); z-index: 5; }
+nav.toc .wrap { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 10px 24px; font-size: .95rem; }
+main { padding: 8px 0 64px; }
+h2 { margin-top: 2.6em; padding-top: .4em; border-top: 1px solid var(--border); font-size: 1.5rem; }
+h3 { margin-top: 1.8em; font-size: 1.15rem; }
+pre { background: #0d1117; border: 1px solid #26313d; color: #c9d5e0; border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: .92rem; line-height: 1.5; }
+.tok-cmd { color: #79b8ff; font-weight: 600; }
+.tok-sub { color: #79b8ff; }
+.tok-flag { color: #8b98a5; }
+.tok-op { color: #ff7b72; }
+.tok-com { color: #f0a04b; }
+.codewrap { position: relative; }
+.codewrap pre { padding-right: 44px; }
+.copy { position: absolute; top: 8px; right: 8px; padding: 5px 6px; border-radius: 6px; border: 1px solid #30363d; background: #161b22; color: #8b98a5; cursor: pointer; line-height: 0; opacity: .7; }
+.copy:hover { opacity: 1; color: #c9d5e0; border-color: #8b98a5; }
+.copy.ok, .copy.ok:hover { color: #2e9e5b; opacity: 1; }
+code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+p code, li code, td code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: .08em .35em; font-size: .88em; }
+table { border-collapse: collapse; width: 100%; font-size: .95rem; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+.muted { color: var(--muted); }
+.pill { display: inline-block; background: var(--code-bg); border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; font-size: .85rem; margin: 2px; }
+footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(--muted); font-size: .9rem; text-align: center; }
+.demo { color: #93a3b3; }
+@media print {
+  pre, pre.demo { background: #fff; border-color: #bbb; color: #111; }
+  .demo { color: #444; }
+  .demo b, .tok-com { color: #a15c00; }
+  .tok-cmd, .tok-sub { color: #1d5aa7; }
+  .tok-op { color: #b3261e; }
+  .tok-flag { color: #555; }
+  .copy { display: none; }
+}
+td.y { color: #2e9e5b; font-weight: 600; }
+td.n { color: #c05555; }
+td.m { color: var(--accent2); }
+.cmp td, .cmp th { white-space: nowrap; }
+.cmp td:not(:first-child), .cmp th:not(:first-child) { text-align: center; }
+.demo b { color: #f0a04b; font-weight: 600; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.install-grid { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
+.install-card { border: 1px solid var(--border); border-radius: 10px; padding: 4px 20px 16px; background: var(--hero-bg); }
+.install-card h3 { margin-top: 14px; display: flex; align-items: baseline; gap: 10px; }
+.install-card .arch { font-size: .8rem; font-weight: 400; color: var(--muted); }
+.install-card pre { font-size: .8rem; white-space: pre-wrap; word-break: break-all; }
+.install-card p { font-size: .92rem; margin: 10px 0 6px; }
