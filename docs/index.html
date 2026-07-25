@@ -336,6 +336,27 @@ excellent. If Java is the job, jolta does the whole job by default — nothing t
 enable, nothing to configure, and a <code>.java-version</code> is all your repo
 needs.</p>
 
+<h3 id="why-shims">Why shims work better for Java than they did for Node</h3>
+<p>Volta proved this architecture, but Node made it pay rent twice: <code>node</code>
+starts in ~30&nbsp;ms, so shim overhead was borderline noticeable, and Node tooling
+finds everything through <code>PATH</code> alone — which forced Volta to also intercept
+<code>npm</code>'s global installs, the source of most of its open bugs. Java inverts
+both economics. JVM startup is 40–100&nbsp;ms+, so jolta's ~2&nbsp;ms resolution
+vanishes below measurement noise; and the long-running tools that matter — Maven,
+the Gradle daemon, IDEs — read <code>JAVA_HOME</code> rather than probing
+<code>PATH</code>, so jolta's hook keeps one environment variable in sync and the hot
+path never crosses a shim at all. Same design, right ecosystem.</p>
+<p>mise makes the opposite bet: a shell hook rewrites your <code>PATH</code> before
+every prompt to point at the resolved tools directly. That's zero-overhead at
+invocation time, but the rewritten environment only exists where the hook runs —
+an interactive shell — and only as of the last prompt. Scripts, Makefiles, CI
+steps, cron jobs, and IDE-spawned builds see a stale snapshot or nothing, and
+keeping the surgery coherent across version switches and other tools'
+<code>PATH</code> edits is its own class of bugs. Jolta's shims re-resolve from the
+working directory on <em>every</em> invocation, so the same project gets the same
+JDK everywhere — terminal, CI, cron, IDE — with zero shell integration required.
+The hook is optional polish, not a load-bearing wall.</p>
+
 <h2 id="uninstall">Uninstall</h2>
 <pre><code>jolta implode</code></pre>
 <p>Removes <code>~/.jolta</code> and the jolta lines from your shell profile, after a
