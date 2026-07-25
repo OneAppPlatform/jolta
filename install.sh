@@ -6,6 +6,25 @@
 #   curl -fsSL https://raw.githubusercontent.com/OneAppPlatform/jolta/main/install.sh | sh
 set -eu
 
+# banner — cyan→violet gradient on a color terminal, plain otherwise
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  printf '\033[38;5;81m%s\033[0m\n'  '   __     ______     __         ______   ______'
+  printf '\033[38;5;75m%s\033[0m\n'  '  /\ \   /\  __ \   /\ \       /\__  _\ /\  __ \'
+  printf '\033[38;5;69m%s\033[0m\n'  ' _\_\ \  \ \ \/\ \  \ \ \____  \/_/\ \/ \ \  __ \'
+  printf '\033[38;5;63m%s\033[0m\n'  '/\_____\  \ \_____\  \ \_____\    \ \_\  \ \_\ \_\'
+  printf '\033[38;5;57m%s\033[0m\n\n' '\/_____/   \/_____/   \/_____/     \/_/   \/_/\/_/'
+else
+  # quoted heredoc: backslashes stay literal
+  cat <<'EOF'
+   __     ______     __         ______   ______
+  /\ \   /\  __ \   /\ \       /\__  _\ /\  __ \
+ _\_\ \  \ \ \/\ \  \ \ \____  \/_/\ \/ \ \  __ \
+/\_____\  \ \_____\  \ \_____\    \ \_\  \ \_\ \_\
+\/_____/   \/_____/   \/_____/     \/_/   \/_/\/_/
+
+EOF
+fi
+
 REPO=${JOLTA_REPO:-OneAppPlatform/jolta}
 REF=${JOLTA_REF:-main}
 

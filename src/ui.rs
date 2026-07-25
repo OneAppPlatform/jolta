@@ -41,6 +41,22 @@ pub fn ok_mark() -> String { green("✓") }
 pub fn bad_mark() -> String { red("✗") }
 pub fn warn_mark() -> String { yellow("!") }
 
+/// The jolta banner, cyan→violet gradient on color terminals, plain otherwise.
+pub fn banner() {
+    const ART: [&str; 5] = [
+        r"   __     ______     __         ______   ______",
+        r"  /\ \   /\  __ \   /\ \       /\__  _\ /\  __ \",
+        r" _\_\ \  \ \ \/\ \  \ \ \____  \/_/\ \/ \ \  __ \",
+        r"/\_____\  \ \_____\  \ \_____\    \ \_\  \ \_\ \_\",
+        r"\/_____/   \/_____/   \/_____/     \/_/   \/_/\/_/",
+    ];
+    const SHADES: [u8; 5] = [81, 75, 69, 63, 57];
+    for (line, shade) in ART.iter().zip(SHADES) {
+        println!("{}", paint(&format!("38;5;{shade}"), line, false));
+    }
+    println!();
+}
+
 pub fn die(msg: &str) -> ! {
     eprintln!("{} {msg}", paint("31", "jolta:", true));
     exit(1);
