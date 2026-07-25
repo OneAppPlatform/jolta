@@ -233,6 +233,22 @@ fi
 out=$(JOLTA_HOME="$fresh" JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 99 2>&1) || true
 check "second install keeps default" "^99\.0\.5\$" "$(cat "$fresh/default")"
 rm -rf "$fresh"
+
+# 16h. fresh machine, plain `java`: baseline shims exist before any JDK is
+# installed, so the first java run reaches jolta and auto-installs the pin
+# (0.5.5 shipped zero shims until the first 'jolta install', so plain java
+# fell through to the OS stub: "Unable to locate a Java Runtime")
+fresh2="$work/fresh-home2"
+mkdir -p "$fresh2"
+JOLTA_HOME="$fresh2" jolta reshim >/dev/null
+[ -x "$fresh2/shims/java" ] && { pass=$((pass+1)); echo "ok   baseline java shim exists with no JDKs"; } \
+  || { fail=$((fail+1)); echo "FAIL baseline java shim exists with no JDKs"; }
+mkdir -p "$work/p8" && cd "$work/p8"
+echo "99.0.5" > .java-version
+out=$( (unset JOLTA_NO_AUTO_INSTALL; JOLTA_HOME="$fresh2" JOLTA_DOWNLOAD_BASE="file://$mirror" \
+        PATH="$fresh2/shims:$PATH" java -version 2>&1) ) || true
+check "plain java auto-installs the pin" "fake-java-99" "$out"
+rm -rf "$fresh2"
 rm -rf "$mirror"
 
 # 17. auto-install: pinning an uninstalled major downloads it (network, opt-in)

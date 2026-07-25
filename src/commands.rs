@@ -65,6 +65,17 @@ Version resolution order:
     );
 }
 
+/// Every tool a current JDK ships. Shimmed unconditionally — before any JDK
+/// is installed — so the very first plain `java` reaches jolta and can
+/// trigger the bootstrap auto-install instead of falling through to the
+/// macOS /usr/bin/java stub ("Unable to locate a Java Runtime").
+const BASELINE_TOOLS: &[&str] = &[
+    "jar", "jarsigner", "java", "javac", "javadoc", "javap", "jcmd", "jconsole", "jdb",
+    "jdeprscan", "jdeps", "jfr", "jhsdb", "jimage", "jinfo", "jlink", "jmap", "jmod",
+    "jnativescan", "jpackage", "jps", "jrunscript", "jshell", "jstack", "jstat", "jstatd",
+    "jwebserver", "keytool", "rmiregistry", "serialver",
+];
+
 pub fn cmd_reshim() {
     let shims = shims_dir();
     let _ = fs::create_dir_all(&shims);
@@ -77,6 +88,14 @@ pub fn cmd_reshim() {
     }
     let me = env::current_exe().unwrap_or_else(|_| die("cannot locate the jolta binary"));
     let mut count = 0u32;
+    for tool in BASELINE_TOOLS {
+        let link = shims.join(format!("{tool}{}", env::consts::EXE_SUFFIX));
+        if platform::make_shim(&me, &link) {
+            count += 1;
+        }
+    }
+    // Installed JDKs can ship extras beyond the baseline (graalvm's gu and
+    // native-image, vendor-patched tools) — shim whatever they have too.
     let mut homes: Vec<PathBuf> = list_all().into_iter().map(|(_, h)| h).collect();
     homes.sort();
     homes.dedup();
