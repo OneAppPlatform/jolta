@@ -1,6 +1,6 @@
 [package]
 name = "jolta"
-version = "0.5.6"
+version = "0.5.7"
 edition = "2021"
 description = "Like Volta, but for Java — automatic per-project JDK switching via .java-version"
 license = "MIT"

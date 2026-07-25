@@ -79,6 +79,25 @@ const BASELINE_TOOLS: &[&str] = &[
 pub fn cmd_reshim() {
     let shims = shims_dir();
     let _ = fs::create_dir_all(&shims);
+    let me = env::current_exe().unwrap_or_else(|_| die("cannot locate the jolta binary"));
+    // When an auto-install fires inside a shim, current_exe on macOS is the
+    // shim symlink itself, not the binary. Resolve it BEFORE clearing the
+    // shims dir (afterwards the symlink is gone and canonicalize can't), or
+    // every rebuilt shim points into the shims dir and java becomes a
+    // symlink loop.
+    let me = fs::canonicalize(&me).unwrap_or(me);
+    // Belt and braces: a target inside the shims dir would recreate the loop
+    // no matter how we got here — fall back to the installed copy.
+    let me = if me.starts_with(&shims) {
+        let installed = jolta_home().join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
+        if installed.is_file() {
+            installed
+        } else {
+            die("cannot locate the real jolta binary (found only the shim) — run 'jolta setup' from the downloaded binary")
+        }
+    } else {
+        me
+    };
     // The shims dir is wholly jolta-owned: clear every entry (Windows shims
     // can be hard links or copies, not just symlinks)
     if let Ok(entries) = fs::read_dir(&shims) {
@@ -86,7 +105,6 @@ pub fn cmd_reshim() {
             let _ = fs::remove_file(entry.path());
         }
     }
-    let me = env::current_exe().unwrap_or_else(|_| die("cannot locate the jolta binary"));
     let mut count = 0u32;
     for tool in BASELINE_TOOLS {
         let link = shims.join(format!("{tool}{}", env::consts::EXE_SUFFIX));
@@ -140,6 +158,7 @@ pub fn cmd_setup() {
         let _ = fs::create_dir_all(home.join(sub));
     }
     let me = env::current_exe().unwrap_or_else(|_| die("cannot locate the jolta binary"));
+    let me = fs::canonicalize(&me).unwrap_or(me);
     let installed = home.join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
     if me != installed {
         // Install a self-contained copy so the build/checkout can be deleted
@@ -209,6 +228,11 @@ pub fn cmd_setup() {
 }
 
 pub fn cmd_pin(spec: &str) {
+    let (_, parsed_version) = parse_spec(spec);
+    if major_of(&parsed_version).is_none() {
+        // an unparseable pin would break every java invocation below this dir
+        die(&format!("cannot parse version '{spec}' (try e.g. 21, 21.0.2, or corretto@21)"));
+    }
     if resolve(spec).is_none() {
         let (vendor, version) = parse_spec(spec);
         let vendor = vendor.unwrap_or("temurin");
@@ -236,10 +260,17 @@ pub fn cmd_pin(spec: &str) {
     fs::write(".java-version", format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write .java-version: {e}")));
     let cwd = env::current_dir().unwrap_or_default();
     println!("{} pinned Java {} in {}/.java-version", ok_mark(), bold(spec), cwd.display());
+    stale_java_home_hint(resolve(spec).as_deref());
 }
 
 pub fn cmd_default(spec: &str) {
-    if resolve(spec).is_none() {
+    let (_, version) = parse_spec(spec);
+    if major_of(&version).is_none() {
+        // an unparseable default would break every java invocation on the box
+        die(&format!("cannot parse version '{spec}' (try e.g. 21, 21.0.2, or corretto@21)"));
+    }
+    let resolved = resolve(spec);
+    if resolved.is_none() {
         eprintln!(
             "{} no installed JDK currently matches '{spec}'",
             paint("33", "jolta: warning:", true)
@@ -248,6 +279,21 @@ pub fn cmd_default(spec: &str) {
     let _ = fs::create_dir_all(jolta_home());
     fs::write(jolta_home().join("default"), format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write default: {e}")));
     println!("{} default Java version set to {}", ok_mark(), bold(spec));
+    stale_java_home_hint(resolved.as_deref());
+}
+
+/// The shims re-resolve on every call, but JAVA_HOME consumers (maven,
+/// gradle, the macOS /usr/bin/java stub) keep whatever the shell hook
+/// exported last — warn when a pin change leaves that stale.
+fn stale_java_home_hint(resolved: Option<&Path>) {
+    if let Ok(jh) = env::var("JAVA_HOME") {
+        if resolved != Some(Path::new(&jh)) {
+            println!(
+                "{}",
+                dim("note: this shell's JAVA_HOME predates the change — cd anywhere (or open a new shell) to let the hook refresh it")
+            );
+        }
+    }
 }
 
 pub fn cmd_list() {
@@ -822,7 +868,21 @@ pub fn cmd_doctor() -> i32 {
         .map(|e| e.flatten().filter(|x| x.path().symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())).count())
         .unwrap_or(0);
     if shim_count > 0 {
-        println!("  shims:         {} ok ({shim_count} installed)", ok_mark());
+        // Symlinks can exist yet be dead: dangling after a moved binary, or a
+        // self-referential loop — either silently hands java to the OS stub.
+        let java_shim = shims_dir().join(format!("java{}", env::consts::EXE_SUFFIX));
+        match fs::canonicalize(&java_shim) {
+            Ok(target) if target.is_file() => {
+                println!("  shims:         {} ok ({shim_count} installed, java -> {})", ok_mark(), target.display());
+            }
+            _ => {
+                println!(
+                    "  shims:         {} BROKEN — the java shim is dangling or a symlink loop; run \"jolta setup\"",
+                    bad_mark()
+                );
+                rc = 1;
+            }
+        }
     } else {
         println!("  shims:         {} MISSING — run \"jolta setup\"", bad_mark());
         rc = 1;

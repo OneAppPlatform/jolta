@@ -46,17 +46,19 @@ pub fn is_exact(version: &str) -> bool {
     !version.starts_with("1.") && version.contains('.')
 }
 
-/// Sortable key from "21.0.4+7" -> 21_000_004 etc.
+/// Sortable key from up to four dotted components ("21.0.4+7", corretto's
+/// five-part "21.0.2.13.1" — where only the 4th distinguishes point builds).
 pub fn numkey(version: &str) -> u64 {
     let v = version
         .split(|c| c == '+' || c == '_' || c == '-')
         .next()
         .unwrap_or("");
-    let mut parts = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    let mut parts = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0).min(999));
     let a = parts.next().unwrap_or(0);
     let b = parts.next().unwrap_or(0);
     let c = parts.next().unwrap_or(0);
-    a * 1_000_000 + b * 1_000 + c
+    let d = parts.next().unwrap_or(0);
+    ((a * 1_000 + b) * 1_000 + c) * 1_000 + d
 }
 
 /// Path to a tool inside a JDK home (`.exe`-suffixed on Windows).

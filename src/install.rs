@@ -49,10 +49,14 @@ fn remote_cache_get(key: &str) -> Option<String> {
     let f = jolta_home().join("remote-cache").join(cache_key(key));
     let ttl_hours: u64 = env::var("JOLTA_CACHE_TTL_HOURS").ok().and_then(|v| v.parse().ok()).unwrap_or(24);
     let age = fs::metadata(&f).ok()?.modified().ok()?.elapsed().ok()?;
+    let body = fs::read_to_string(&f).ok()?;
+    // Negative verdicts (empty body, "0") expire after an hour at most: one
+    // transient network blip must not wedge "not published" answers for a day.
+    let ttl_hours = if body.is_empty() || body == "0" { ttl_hours.min(1) } else { ttl_hours };
     if age > Duration::from_secs(ttl_hours * 3600) {
         return None;
     }
-    fs::read_to_string(&f).ok()
+    Some(body)
 }
 
 fn remote_cache_put(key: &str, value: &str) {
@@ -486,7 +490,10 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     } else {
         vendor_url(vendor, major)
     };
-    let tmp = env::temp_dir().join(format!("jolta-install-{}", std::process::id()));
+    // Extract inside JOLTA_HOME so the final rename into jdks/ never crosses
+    // filesystems (/tmp is tmpfs on many Linux distros; rename(2) can't span
+    // devices).
+    let tmp = jolta_home().join("tmp").join(format!("install-{}", std::process::id()));
     let _ = fs::create_dir_all(&tmp);
     let _tmp_guard = TmpGuard(tmp.clone());
 

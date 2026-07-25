@@ -248,8 +248,27 @@ echo "99.0.5" > .java-version
 out=$( (unset JOLTA_NO_AUTO_INSTALL; JOLTA_HOME="$fresh2" JOLTA_DOWNLOAD_BASE="file://$mirror" \
         PATH="$fresh2/shims:$PATH" java -version 2>&1) ) || true
 check "plain java auto-installs the pin" "fake-java-99" "$out"
+
+# 16i. the auto-install above rebuilt fresh2's shims FROM INSIDE a shim; on
+# macOS current_exe is then the shim symlink itself and 0.5.6 rewrote every
+# shim as a symlink loop — a second java run must still work
+out=$( (unset JOLTA_NO_AUTO_INSTALL; JOLTA_HOME="$fresh2" JOLTA_DOWNLOAD_BASE="file://$mirror" \
+        PATH="$fresh2/shims:$PATH" java -version 2>&1) ) || true
+check "shims survive a shim-triggered reshim" "fake-java-99" "$out"
 rm -rf "$fresh2"
 rm -rf "$mirror"
+
+# 16j. unparseable specs are rejected, not written (a garbage default would
+# break every java invocation on the machine)
+cd "$work"
+out=$(jolta default banana 2>&1) && rc=0 || rc=$?
+[ "$rc" -ne 0 ] && { pass=$((pass+1)); echo "ok   garbage default rejected"; } \
+  || { fail=$((fail+1)); echo "FAIL garbage default rejected (got: $out)"; }
+check "default file untouched by garbage" "^$m1\$" "$(cat "$JOLTA_HOME/default")"
+mkdir -p "$work/p9" && cd "$work/p9"
+out=$(jolta pin banana 2>&1) && rc=0 || rc=$?
+[ "$rc" -ne 0 ] && [ ! -f .java-version ] && { pass=$((pass+1)); echo "ok   garbage pin rejected"; } \
+  || { fail=$((fail+1)); echo "FAIL garbage pin rejected (got: $out)"; }
 
 # 17. auto-install: pinning an uninstalled major downloads it (network, opt-in)
 if [ "${JOLTA_TEST_NETWORK:-}" = "1" ]; then
