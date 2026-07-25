@@ -1212,6 +1212,31 @@ mkdir -p "$work/k5" && cd "$work/k5" && echo 46 > .java-version
 out=$(jolta doctor 2>&1)
 check "doctor flags a wrong-arch java binary" "arch" "$out"
 
+# same-directory `jolta pin` must refresh JAVA_HOME by the next prompt,
+# with no cd (the stamp mechanism; the case cd-hooks classically miss)
+mkdir -p "$work/k6" && cd "$work/k6" && echo 97 > .java-version
+if command -v zsh >/dev/null 2>&1; then
+  out=$(zsh -f -c '
+    export PATH="'"$JOLTA_HOME/shims:$bindir"':$PATH" JOLTA_HOME="'"$JOLTA_HOME"'" JOLTA_NO_AUTO_INSTALL=1
+    cd "'"$work"'/k6"
+    eval "$(jolta hook zsh)"
+    echo "before:$JAVA_HOME"
+    jolta pin 96 >/dev/null 2>&1
+    _jolta_sync
+    echo "after:$JAVA_HOME"' 2>/dev/null)
+  check "zsh: same-dir pin refreshes JAVA_HOME at next prompt" "after:$JOLTA_HOME/jdks/corretto-96.0.1" "$out"
+fi
+echo 97 > "$work/k6/.java-version"
+out=$(bash --noprofile --norc -c '
+  export PATH="'"$JOLTA_HOME/shims:$bindir"':$PATH" JOLTA_HOME="'"$JOLTA_HOME"'" JOLTA_NO_AUTO_INSTALL=1
+  cd "'"$work"'/k6"
+  eval "$(jolta hook bash)"
+  echo "before:$JAVA_HOME"
+  jolta pin 96 >/dev/null 2>&1
+  eval "$PROMPT_COMMAND"
+  echo "after:$JAVA_HOME"' 2>/dev/null)
+check "bash: same-dir pin refreshes JAVA_HOME at next prompt" "after:$JOLTA_HOME/jdks/corretto-96.0.1" "$out"
+
 # arm64 macs fall back to the x64 build when no arm64 asset exists (volta #1860)
 if [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ]; then
   publish temurin 45 45.0.1
