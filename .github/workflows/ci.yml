@@ -72,7 +72,11 @@ jobs:
               apt-get update -q >/dev/null && apt-get install -y -q curl ca-certificates >/dev/null
               command -v java && exit 1  # the box must start with no JDK
               export JOLTA_HOME=/root/.jolta
-              jolta exec java -version 2>&1 | tee /tmp/out
+              jolta setup
+              export PATH=/root/.jolta/shims:$PATH
+              # plain java through the shims, not jolta exec: setup must
+              # produce a working java before any JDK is installed
+              java -version 2>&1 | tee /tmp/out
               grep -q "latest LTS" /tmp/out
               grep -q "openjdk" /tmp/out
               grep -Eq "^[0-9]+$" /root/.jolta/default
