@@ -799,6 +799,9 @@ pub fn cmd_uninstall(name: &str) {
     fs::remove_dir_all(&dest).unwrap_or_else(|e| die(&format!("cannot remove {}: {e}", dest.display())));
     clear_cache();
     println!("{} removed {}", ok_mark(), dest.display());
+    // Drop shims for vendor-specific extras (gu, native-image, ...) that no
+    // remaining JDK provides; the baseline set always survives.
+    cmd_reshim();
 }
 
 pub fn cmd_implode(args: &[String]) {

@@ -210,6 +210,9 @@ check ".java-version beats .sdkmanrc" "99.0.1" "$(jolta current 2>/dev/null | he
 cd "$work"
 jolta uninstall temurin-99.0.5 >/dev/null 2>&1 || true
 jolta uninstall temurin-99.0.1 >/dev/null 2>&1 || true
+# uninstall reshims: vendor extras drop, the baseline set must survive
+[ -e "$JOLTA_HOME/shims/java" ] && { pass=$((pass+1)); echo "ok   uninstall keeps baseline shims"; } \
+  || { fail=$((fail+1)); echo "FAIL uninstall keeps baseline shims"; }
 
 # 16e. fresh machine: the FIRST install pins the global default, so plain
 # `java` resolves with no .java-version and nothing registered in java_home
