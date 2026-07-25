@@ -28,6 +28,33 @@ jobs:
         shell: pwsh
         run: ./test/smoke.ps1
 
+  # Bumping `version` in Cargo.toml is the release trigger: once main is
+  # green, the new v<version> tag is pushed and the release build dispatched
+  # (tags pushed with GITHUB_TOKEN never fire on:push workflows themselves).
+  release-tag:
+    name: tag release when Cargo.toml version is new
+    needs: [test, fresh-bootstrap]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push v<version> tag and dispatch the release build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="v$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
+          [ "$v" != "v" ] || { echo "cannot read version from Cargo.toml" >&2; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$v" >/dev/null 2>&1; then
+            echo "$v already tagged — nothing to release"
+            exit 0
+          fi
+          git tag "$v"
+          git push origin "$v"
+          gh workflow run release.yml --ref "$v"
+
   fresh-bootstrap:
     name: fresh machine bootstrap (no JDK anywhere)
     runs-on: ubuntu-latest

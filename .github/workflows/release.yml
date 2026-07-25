@@ -1,8 +1,11 @@
 name: Release
 
+# Normally dispatched by the release-tag job in ci.yml after a green main
+# build; the tag-push trigger still covers manually pushed tags.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
