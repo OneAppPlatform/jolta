@@ -237,9 +237,11 @@ filters like <code>temurin@21.0</code> — with installed versions marked.</p>
 jolta install graalvm@25     # explicitly fetch a GraalVM JDK</code></pre>
 <ul>
   <li><strong>Downloadable:</strong> <code>temurin</code> (default), <code>corretto</code>,
-      <code>graalvm</code>, <code>oracle</code>, <code>zulu</code>.</li>
-  <li><strong>Recognized when matching:</strong> those five plus
-      <code>openjdk</code> (Homebrew builds).</li>
+      <code>graalvm</code>, <code>oracle</code>, <code>zulu</code>, <code>liberica</code>,
+      <code>sapmachine</code>, <code>graalce</code> (GraalVM Community).</li>
+  <li><strong>Recognized when matching:</strong> those eight plus
+      <code>openjdk</code> (Homebrew), <code>semeru</code> (IBM OpenJ9),
+      <code>microsoft</code>, and <code>dragonwell</code>.</li>
   <li>A distro-qualified pin is strict — <code>corretto-21</code> picks an installed
       Corretto 21 over a Homebrew OpenJDK 21, and auto-installs Corretto if missing.
       A bare <code>21</code> matches any distro.</li>

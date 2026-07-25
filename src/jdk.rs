@@ -7,9 +7,13 @@ use std::process::Command;
 use crate::paths::jolta_home;
 
 /// JDK distros jolta knows how to download. The default is temurin.
-pub const INSTALLABLE_VENDORS: [&str; 5] = ["temurin", "corretto", "graalvm", "oracle", "zulu"];
+pub const INSTALLABLE_VENDORS: [&str; 8] =
+    ["temurin", "corretto", "graalvm", "oracle", "zulu", "liberica", "sapmachine", "graalce"];
 /// Vendors recognized for pinning/matching (superset of the installable ones).
-pub const KNOWN_VENDORS: [&str; 6] = ["temurin", "corretto", "graalvm", "oracle", "zulu", "openjdk"];
+pub const KNOWN_VENDORS: [&str; 12] = [
+    "temurin", "corretto", "graalvm", "oracle", "zulu", "liberica", "sapmachine", "graalce",
+    "openjdk", "semeru", "microsoft", "dragonwell",
+];
 
 /// Split a spec into (vendor, version): "corretto@21" / "corretto-21" ->
 /// (Some("corretto"), "21"); "21.0.4" -> (None, "21.0.4").
@@ -101,19 +105,44 @@ pub fn version_from_name(dir: &Path) -> Option<String> {
     if v.is_empty() { None } else { Some(v) }
 }
 
+/// Map an sdkman-style vendor suffix ("8.0.392-tem" dirs, "-tem" in
+/// .sdkmanrc) to a jolta vendor name. Empty for unknown suffixes.
+pub fn sdkman_suffix_vendor(suffix: &str) -> &'static str {
+    match suffix {
+        "tem" => "temurin",
+        "amzn" => "corretto",
+        "zulu" => "zulu",
+        "graal" => "graalvm",
+        "graalce" => "graalce",
+        "oracle" => "oracle",
+        "open" => "openjdk",
+        "librca" => "liberica",
+        "sapmchn" => "sapmachine",
+        "sem" => "semeru",
+        "ms" => "microsoft",
+        "albba" => "dragonwell",
+        _ => "",
+    }
+}
+
 /// Which distro a JDK home is, from its release IMPLEMENTOR or its path.
 pub fn vendor_of(home: &Path) -> Option<&'static str> {
     let release = fs::read_to_string(home.join("release")).unwrap_or_default();
     let mut implementor = String::new();
+    let mut graal = false;
     for line in release.lines() {
         if line.starts_with("GRAALVM_VERSION") {
-            return Some("graalvm");
+            graal = true;
         }
         if let Some(rest) = line.strip_prefix("IMPLEMENTOR=\"") {
             implementor = rest.trim_end_matches('"').to_string();
         }
     }
     let imp = implementor.to_ascii_lowercase();
+    if graal {
+        // CE identifies as "GraalVM Community"; the Oracle build as "Oracle"
+        return Some(if imp.contains("community") { "graalce" } else { "graalvm" });
+    }
     if imp.contains("amazon") {
         return Some("corretto");
     }
@@ -122,6 +151,21 @@ pub fn vendor_of(home: &Path) -> Option<&'static str> {
     }
     if imp.contains("azul") {
         return Some("zulu");
+    }
+    if imp.contains("bellsoft") {
+        return Some("liberica");
+    }
+    if imp.contains("sap ") || imp == "sap se" {
+        return Some("sapmachine");
+    }
+    if imp.contains("ibm") || imp.contains("international business machines") {
+        return Some("semeru");
+    }
+    if imp.contains("microsoft") {
+        return Some("microsoft");
+    }
+    if imp.contains("alibaba") {
+        return Some("dragonwell");
     }
     if imp.contains("homebrew") {
         return Some("openjdk");
@@ -134,22 +178,14 @@ pub fn vendor_of(home: &Path) -> Option<&'static str> {
     // sdkman installed but never vendor-match it.
     if let Some(name) = home.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()) {
         if let Some((_, suffix)) = name.rsplit_once('-') {
-            let v = match suffix {
-                "tem" => "temurin",
-                "amzn" => "corretto",
-                "zulu" => "zulu",
-                "graal" | "graalce" => "graalvm",
-                "oracle" => "oracle",
-                "open" => "openjdk",
-                _ => "",
-            };
+            let v = sdkman_suffix_vendor(suffix);
             if !v.is_empty() {
                 return KNOWN_VENDORS.iter().find(|k| **k == v).copied();
             }
         }
     }
     let path = home.to_string_lossy().to_ascii_lowercase();
-    for v in ["corretto", "temurin", "zulu", "oracle"] {
+    for v in ["corretto", "temurin", "zulu", "liberica", "sapmachine", "semeru", "microsoft", "dragonwell", "oracle"] {
         if path.contains(v) {
             return KNOWN_VENDORS.iter().find(|k| **k == v).copied();
         }
@@ -189,7 +225,12 @@ pub fn list_managed() -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     let jdks = jolta_home().join("jdks");
     let Ok(entries) = fs::read_dir(&jdks) else { return out };
-    for entry in entries.flatten() {
+    // Sorted, not read_dir order: when two vendors carry the same version and
+    // a vendorless pin ties, the winner must be deterministic (alphabetical
+    // vendor), not whatever the filesystem enumerates first.
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
         let dir = entry.path();
         if !dir.is_dir() {
             continue;
@@ -298,4 +339,94 @@ pub fn system_default() -> Option<PathBuf> {
         .filter(|(_, h)| has_java(h))
         .max_by_key(|(v, _)| numkey(v))
         .map(|(_, h)| h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One temp JDK home per test, with the given release-file contents.
+    fn fake_home(name: &str, release: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jolta-unit-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("release"), release).unwrap();
+        dir
+    }
+
+    /// Per-vendor contract: the spec parses, the release IMPLEMENTOR is
+    /// recognized, and the sdkman suffix maps — one test per vendor.
+    fn assert_vendor(vendor: &str, implementor_line: &str, suffix: &str) {
+        assert_eq!(parse_spec(&format!("{vendor}@21")).0, Some(vendor), "spec {vendor}@21");
+        assert_eq!(parse_spec(&format!("{vendor}-21")).0, Some(vendor), "spec {vendor}-21");
+        let home = fake_home(vendor, &format!("JAVA_VERSION=\"21.0.1\"\n{implementor_line}\n"));
+        assert_eq!(vendor_of(&home), Some(vendor), "IMPLEMENTOR for {vendor}");
+        let _ = fs::remove_dir_all(&home);
+        if !suffix.is_empty() {
+            assert_eq!(sdkman_suffix_vendor(suffix), vendor, "suffix -{suffix}");
+        }
+    }
+
+    #[test]
+    fn vendor_temurin() { assert_vendor("temurin", "IMPLEMENTOR=\"Eclipse Adoptium\"", "tem"); }
+    #[test]
+    fn vendor_corretto() { assert_vendor("corretto", "IMPLEMENTOR=\"Amazon.com Inc.\"", "amzn"); }
+    #[test]
+    fn vendor_zulu() { assert_vendor("zulu", "IMPLEMENTOR=\"Azul Systems, Inc.\"", "zulu"); }
+    #[test]
+    fn vendor_oracle() { assert_vendor("oracle", "IMPLEMENTOR=\"Oracle Corporation\"", "oracle"); }
+    #[test]
+    fn vendor_liberica() { assert_vendor("liberica", "IMPLEMENTOR=\"BellSoft\"", "librca"); }
+    #[test]
+    fn vendor_sapmachine() { assert_vendor("sapmachine", "IMPLEMENTOR=\"SAP SE\"", "sapmchn"); }
+    #[test]
+    fn vendor_semeru() {
+        assert_vendor("semeru", "IMPLEMENTOR=\"International Business Machines Corporation\"", "sem");
+    }
+    #[test]
+    fn vendor_microsoft() { assert_vendor("microsoft", "IMPLEMENTOR=\"Microsoft\"", "ms"); }
+    #[test]
+    fn vendor_dragonwell() { assert_vendor("dragonwell", "IMPLEMENTOR=\"Alibaba Cloud Compute\"", "albba"); }
+    #[test]
+    fn vendor_openjdk() { assert_vendor("openjdk", "IMPLEMENTOR=\"Homebrew\"", "open"); }
+
+    #[test]
+    fn vendor_graalvm_oracle_build() {
+        let home = fake_home(
+            "graalvm",
+            "JAVA_VERSION=\"21.0.2\"\nIMPLEMENTOR=\"Oracle Corporation\"\nGRAALVM_VERSION=\"23.1.2\"\n",
+        );
+        assert_eq!(vendor_of(&home), Some("graalvm"));
+        let _ = fs::remove_dir_all(&home);
+        assert_eq!(parse_spec("graalvm@21").0, Some("graalvm"));
+        assert_eq!(sdkman_suffix_vendor("graal"), "graalvm");
+    }
+
+    #[test]
+    fn vendor_graalce_community_build() {
+        let home = fake_home(
+            "graalce",
+            "JAVA_VERSION=\"21.0.2\"\nIMPLEMENTOR=\"GraalVM Community\"\nGRAALVM_VERSION=\"23.1.2\"\n",
+        );
+        assert_eq!(vendor_of(&home), Some("graalce"));
+        let _ = fs::remove_dir_all(&home);
+        assert_eq!(parse_spec("graalce@21").0, Some("graalce"));
+        assert_eq!(sdkman_suffix_vendor("graalce"), "graalce");
+    }
+
+    #[test]
+    fn every_installable_vendor_is_known() {
+        for v in INSTALLABLE_VENDORS {
+            assert!(KNOWN_VENDORS.contains(&v), "{v} installable but not known");
+        }
+    }
+
+    #[test]
+    fn version_parsing_basics() {
+        assert_eq!(major_of("21.0.4"), Some(21));
+        assert_eq!(major_of("1.8.0_392"), Some(8));
+        assert!(numkey("1.8.0_402") > numkey("1.8.0_392"));
+        assert!(numkey("21.0.10") > numkey("21.0.2"));
+        assert!(is_exact("21.0.2") && !is_exact("21") && !is_exact("1.8"));
+    }
 }

@@ -18,6 +18,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: cargo build --release
+      - name: Unit tests (per-vendor URL shapes, detection, parsing)
+        run: cargo test --release
       - name: Conformance suite (unix)
         if: runner.os != 'Windows'
         # Offline checks only; runners ship multiple JDK majors, which is all

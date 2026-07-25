@@ -130,14 +130,7 @@ fn parse_sdkmanrc(text: &str) -> Option<String> {
             Some((v, s)) => (v, s),
             None => (value, ""),
         };
-        let vendor = match suffix {
-            "tem" => "temurin",
-            "amzn" => "corretto",
-            "zulu" => "zulu",
-            "graal" | "graalce" => "graalvm",
-            "oracle" => "oracle",
-            _ => "",
-        };
+        let vendor = crate::jdk::sdkman_suffix_vendor(suffix);
         return Some(if vendor.is_empty() {
             // unknown distro suffix: match on version across any distro
             version.to_string()
@@ -323,5 +316,40 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
                  or set a global default with 'jolta default <version>'",
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_sdkmanrc;
+
+    /// Per-vendor .sdkmanrc suffix contract — one assertion per vendor.
+    #[test]
+    fn sdkmanrc_vendor_suffixes() {
+        for (suffix, vendor) in [
+            ("tem", "temurin"),
+            ("amzn", "corretto"),
+            ("zulu", "zulu"),
+            ("oracle", "oracle"),
+            ("graal", "graalvm"),
+            ("graalce", "graalce"),
+            ("librca", "liberica"),
+            ("sapmchn", "sapmachine"),
+            ("sem", "semeru"),
+            ("ms", "microsoft"),
+            ("albba", "dragonwell"),
+            ("open", "openjdk"),
+        ] {
+            assert_eq!(
+                parse_sdkmanrc(&format!("java=21.0.4-{suffix}\n")),
+                Some(format!("{vendor}@21.0.4")),
+                "suffix -{suffix}"
+            );
+        }
+    }
+
+    #[test]
+    fn sdkmanrc_unknown_suffix_is_vendorless() {
+        assert_eq!(parse_sdkmanrc("java=21.0.4-wibble\n"), Some("21.0.4".into()));
     }
 }

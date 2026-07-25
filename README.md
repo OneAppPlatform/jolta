@@ -118,9 +118,12 @@ jolta pin corretto@21        # this project wants Amazon Corretto 21
 jolta install graalvm@25     # explicitly fetch a GraalVM JDK
 ```
 
-- **Downloadable distros:** `temurin` (default), `corretto`, `graalvm`, `oracle`, `zulu`.
+- **Downloadable distros:** `temurin` (default), `corretto`, `graalvm`, `oracle`,
+  `zulu`, `liberica`, `sapmachine`, `graalce` (GraalVM Community).
 - **Recognized when matching** (installed JDKs are identified by their release
-  metadata and path): those five plus `openjdk` (Homebrew builds).
+  metadata and path): those eight plus `openjdk` (Homebrew builds), `semeru`
+  (IBM OpenJ9), `microsoft`, and `dragonwell` — so pins and `.sdkmanrc` entries
+  for those distros match JDKs you installed by other means.
 - A distro-qualified pin only matches that distro — `corretto-21` will pick an
   installed Corretto 21 over a Homebrew OpenJDK 21, and auto-install Corretto if
   it's missing. A bare `21` matches any distro of major 21.

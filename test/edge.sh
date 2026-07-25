@@ -265,7 +265,7 @@ check ".sdkmanrc without trailing newline" "temurin-97.0.1" "$(jolta home 2>/dev
 printf 'java=96.0.1-amzn\n' > .sdkmanrc
 check ".sdkmanrc -amzn suffix -> corretto" "corretto-96.0.1" "$(jolta home 2>/dev/null)"
 
-printf 'java=97.0.1-librca\n' > .sdkmanrc
+printf 'java=97.0.1-wibble\n' > .sdkmanrc
 check ".sdkmanrc unknown suffix matches any vendor" "temurin-97.0.1" "$(jolta home 2>/dev/null)"
 
 printf '# toolchain\nmaven=3.9.6\n\njava=97.0.1-tem\n' > .sdkmanrc
@@ -490,7 +490,7 @@ check_eq "same version under two vendors both listed" 2 "$count"
 echo 87.0.7 > .java-version
 jolta_rc jolta home
 check_rc "vendorless exact pin with two candidates resolves" 0 "$rc"
-check "vendorless exact resolves to one of them" "87.0.7" "$out"
+check "vendorless exact tie is deterministic (alphabetical)" "corretto-87.0.7" "$out"
 
 # resolution cache: poison it, jolta must self-heal
 echo 97 > .java-version
@@ -1248,6 +1248,42 @@ if [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ]; then
 else
   echo "skip x64-fallback test (not an arm64 mac)"
 fi
+
+# =================================================================
+section "N. distro recognition, one block per vendor"
+# =================================================================
+
+# Each vendor: IMPLEMENTOR-based detection, vendored pin, .sdkmanrc suffix.
+# vendor_check <vendor> <major> <implementor> <sdkman-suffix>
+vendor_check() {
+  vc_vendor=$1 vc_major=$2 vc_imp=$3 vc_suffix=$4
+  mk_jdk "$vc_vendor-$vc_major.0.1" "$vc_major.0.1" "$vc_imp"
+  mkdir -p "$work/n-$vc_vendor" && cd "$work/n-$vc_vendor"
+  echo "$vc_vendor@$vc_major" > .java-version
+  check "$vc_vendor: vendored pin resolves via IMPLEMENTOR" "$vc_vendor-$vc_major.0.1" \
+    "$(jolta home 2>/dev/null)"
+  rm .java-version
+  printf 'java=%s.0.1-%s\n' "$vc_major" "$vc_suffix" > .sdkmanrc
+  check "$vc_vendor: .sdkmanrc -$vc_suffix suffix resolves" "$vc_vendor-$vc_major.0.1" \
+    "$(jolta home 2>/dev/null)"
+  check "$vc_vendor: jdks reports the vendor" "	$vc_vendor	" \
+    "$(jolta jdks 2>/dev/null | grep "^$vc_major	" || true)"
+}
+vendor_check liberica   35 "BellSoft"                                    librca
+vendor_check sapmachine 34 "SAP SE"                                     sapmchn
+vendor_check semeru     33 "International Business Machines Corporation" sem
+vendor_check microsoft  32 "Microsoft"                                   ms
+vendor_check dragonwell 31 "Alibaba Cloud Compute"                       albba
+
+# GraalVM CE vs Oracle GraalVM: same GRAALVM_VERSION marker, different builds
+mk_jdk graalce-30.0.1 30.0.1 "GraalVM Community"
+printf 'GRAALVM_VERSION="23.1.2"\n' >> "$JOLTA_HOME/jdks/graalce-30.0.1/release"
+mkdir -p "$work/n-graalce" && cd "$work/n-graalce"
+echo graalce@30 > .java-version
+check "graalce: community build resolves as graalce" "graalce-30.0.1" "$(jolta home 2>/dev/null)"
+echo graalvm@30 > .java-version
+jolta_rc jolta home
+check_rc "graalce: does not satisfy a graalvm (Oracle) pin" nonzero "$rc"
 
 # =================================================================
 section "M. mirror metadata, sync & verify"

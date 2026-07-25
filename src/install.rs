@@ -209,6 +209,65 @@ fn bump_last(version: &str) -> String {
     parts.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(".")
 }
 
+/// Pure URL formatters for the GitHub-released and constructible vendors —
+/// separated from the network paths so each vendor's URL shape is unit-tested.
+pub fn sapmachine_url(version: &str, os: &str, arch: &str, ext: &str) -> String {
+    format!(
+        "https://github.com/SAP/SapMachine/releases/download/sapmachine-{version}/sapmachine-jdk-{version}_{os}-{arch}_bin.{ext}"
+    )
+}
+
+pub fn graalce_url(version: &str, os: &str, arch: &str, ext: &str) -> String {
+    format!(
+        "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-{version}/graalvm-community-jdk-{version}_{os}-{arch}_bin.{ext}"
+    )
+}
+
+/// Liberica names x86_64 "amd64" and appends "-musl" for Alpine builds; the
+/// `full` version must include the +build (the API supplies it).
+pub fn liberica_url(full: &str, os: &str, arch: &str, ext: &str, musl: bool) -> String {
+    let arch = if arch == "x64" { "amd64" } else { arch };
+    let musl = if musl && os == "linux" { "-musl" } else { "" };
+    format!("https://github.com/bell-sw/Liberica/releases/download/{full}/bellsoft-jdk{full}-{os}-{arch}{musl}.{ext}")
+}
+
+/// Liberica full versions ("21.0.4+9") for a major, newest first, via the
+/// BellSoft API.
+fn liberica_versions(major: u32) -> Vec<String> {
+    let (os, _, ext) = platform();
+    let os = if os == "linux" && is_musl() { "linux-musl" } else { os };
+    let Some(body) = curl_text(&format!(
+        "https://api.bell-sw.com/v1/liberica/releases?version-feature={major}&bundle-type=jdk&os={os}&package-type={ext}&bitness=64"
+    )) else {
+        return Vec::new();
+    };
+    let mut out = json_strings(&body, "version");
+    out.sort_by_key(|v| std::cmp::Reverse(crate::jdk::numkey(v)));
+    out.dedup();
+    out
+}
+
+/// Latest GA tag for a GitHub-released vendor (SapMachine, GraalVM CE):
+/// strip the tag prefix, skip EA/+build tags, take the highest for the major.
+fn github_latest(repo: &str, tag_prefix: &str, major: u32) -> Option<String> {
+    let mut tags = Vec::new();
+    for page in 1..=2 {
+        let body = curl_text(&format!("https://api.github.com/repos/{repo}/releases?per_page=100&page={page}"))?;
+        let t = json_strings(&body, "tag_name");
+        let n = t.len();
+        tags.extend(t);
+        if n < 100 {
+            break;
+        }
+    }
+    tags.iter()
+        .filter_map(|t| t.strip_prefix(tag_prefix))
+        .filter(|v| !v.contains('+') && !v.contains("ea"))
+        .filter(|v| major_of(v) == Some(major))
+        .max_by_key(|v| crate::jdk::numkey(v))
+        .map(str::to_string)
+}
+
 /// Zulu has no constructible URLs; ask the Azul metadata API. Works for both
 /// latest-of-major and exact versions. Filters out JavaFX/CRaC variant builds.
 fn zulu_url(version: &str, latest: bool) -> Option<String> {
@@ -299,7 +358,32 @@ fn exact_url(vendor: &str, version: &str) -> Option<String> {
             "https://download.oracle.com/graalvm/{major}/archive/graalvm-jdk-{version}_{os}-{arch}_bin.{ext}"
         )),
         "zulu" => zulu_url(version, false),
+        "sapmachine" => Some(sapmachine_url(version, os, arch, ext)),
+        "graalce" => Some(graalce_url(version, os, arch, ext)),
+        "liberica" => {
+            // resolve "21.0.4" -> full "21.0.4+9" via the API; +build pins pass through
+            let full = if version.contains('+') {
+                version.to_string()
+            } else {
+                liberica_versions(major)
+                    .into_iter()
+                    .find(|v| v == version || v.starts_with(&format!("{version}+")))?
+            };
+            Some(liberica_url(&full, os, arch, ext, is_musl()))
+        }
         _ => None,
+    }
+}
+
+/// Download URL for the latest build of a vendor+major on this platform.
+pub fn latest_download_url(vendor: &str, major: u32) -> Option<String> {
+    match vendor {
+        "zulu" => zulu_url(&major.to_string(), true),
+        "liberica" | "sapmachine" | "graalce" => {
+            let v = latest_remote_version(vendor, major)?;
+            exact_url(vendor, &v)
+        }
+        _ => Some(vendor_url(vendor, major)),
     }
 }
 
@@ -358,6 +442,12 @@ pub fn latest_remote_version(vendor: &str, major: u32) -> Option<String> {
 }
 
 fn latest_remote_version_uncached(vendor: &str, major: u32) -> Option<String> {
+    match vendor {
+        "liberica" => return liberica_versions(major).into_iter().next(),
+        "sapmachine" => return github_latest("SAP/SapMachine", "sapmachine-", major),
+        "graalce" => return github_latest("graalvm/graalvm-ce-builds", "jdk-", major),
+        _ => {}
+    }
     if vendor == "zulu" {
         // no redirect chain to inspect; the API filename carries the version
         let url = zulu_url(&major.to_string(), true)?;
@@ -512,6 +602,8 @@ pub fn vendor_versions(vendor: &str, major: u32) -> Vec<String> {
             out.dedup();
             out
         }
+        "liberica" => liberica_versions(major),
+        "sapmachine" | "graalce" => latest_remote_version(vendor, major).into_iter().collect(),
         "oracle" | "graalvm" => latest_remote_version(vendor, major).into_iter().collect(),
         _ => Vec::new(),
     };
@@ -524,7 +616,8 @@ pub fn vendor_versions(vendor: &str, major: u32) -> Vec<String> {
 /// serve directly with no redirect, the version is only known post-download.)
 pub fn probe_latest(vendor: &str, major: u32) -> bool {
     let url = match vendor {
-        "zulu" => return false, // has a metadata API; never needs probing
+        // these have listing APIs; never need URL probing
+        "zulu" | "liberica" | "sapmachine" | "graalce" => return false,
         _ => vendor_url(vendor, major),
     };
     url_ok(&url)
@@ -664,8 +757,7 @@ fn mirror_sync(args: &[String]) {
                 PLATFORM_OVERRIDE.store(i + 1, Ordering::Relaxed);
                 let url = match &from {
                     Some(base) => Some(format!("{base}/{vendor}/{major}/{os}-{arch}.{ext}")),
-                    None if vendor == "zulu" => zulu_url(&major.to_string(), true),
-                    None => Some(vendor_url(vendor, *major)),
+                    None => latest_download_url(vendor, *major),
                 };
                 PLATFORM_OVERRIDE.store(0, Ordering::Relaxed);
                 let dest = out_dir.join(format!("{os}-{arch}.{ext}"));
@@ -780,9 +872,9 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     }
     // musl systems: only temurin and zulu publish musl builds; a glibc JDK
     // would install fine and then die in the loader on first use.
-    if is_musl() && !matches!(vendor, "temurin" | "zulu") && env::var("JOLTA_DOWNLOAD_BASE").is_err() {
+    if is_musl() && !matches!(vendor, "temurin" | "zulu" | "liberica") && env::var("JOLTA_DOWNLOAD_BASE").is_err() {
         die(&format!(
-            "'{vendor}' publishes no musl builds (this looks like Alpine) — use temurin or zulu"
+            "'{vendor}' publishes no musl builds (this looks like Alpine) — use temurin, zulu, or liberica"
         ));
     }
     // Serialize concurrent installs of the same distro+version (parallel
@@ -848,10 +940,8 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
             Some(format!("{}/{vendor}/{version}/{os}-{arch}.{ext}", encode_spaces(base.trim_end_matches('/'))))
         } else if is_exact(version) {
             exact_url(vendor, version)
-        } else if vendor == "zulu" {
-            zulu_url(version, true)
         } else {
-            Some(vendor_url(vendor, major))
+            latest_download_url(vendor, major)
         }
     };
     // Extract inside JOLTA_HOME so the final rename into jdks/ never crosses
@@ -983,4 +1073,40 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     }
     cmd_reshim();
     Ok(full)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// URL shapes verified against the vendors' real published assets —
+    /// one test per constructible vendor.
+    #[test]
+    fn url_sapmachine() {
+        assert_eq!(
+            sapmachine_url("21.0.4", "linux", "aarch64", "tar.gz"),
+            "https://github.com/SAP/SapMachine/releases/download/sapmachine-21.0.4/sapmachine-jdk-21.0.4_linux-aarch64_bin.tar.gz"
+        );
+    }
+
+    #[test]
+    fn url_graalce() {
+        assert_eq!(
+            graalce_url("21.0.2", "macos", "aarch64", "tar.gz"),
+            "https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-21.0.2/graalvm-community-jdk-21.0.2_macos-aarch64_bin.tar.gz"
+        );
+    }
+
+    #[test]
+    fn url_liberica() {
+        assert_eq!(
+            liberica_url("21.0.12+10", "macos", "aarch64", "tar.gz", false),
+            "https://github.com/bell-sw/Liberica/releases/download/21.0.12+10/bellsoft-jdk21.0.12+10-macos-aarch64.tar.gz"
+        );
+        // x86_64 is "amd64" in liberica's naming; musl gets a suffix
+        assert_eq!(
+            liberica_url("21.0.12+10", "linux", "x64", "tar.gz", true),
+            "https://github.com/bell-sw/Liberica/releases/download/21.0.12+10/bellsoft-jdk21.0.12+10-linux-amd64-musl.tar.gz"
+        );
+    }
 }
