@@ -16,6 +16,7 @@ mod resolve;
 mod ui;
 
 use std::env;
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::{exit, Command};
 
@@ -26,7 +27,9 @@ use ui::die;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Shim mode: resolve the pinned JDK and exec the real `tool` from it.
-fn run_shim(tool: &str, args: Vec<String>) -> ! {
+/// Args stay OsString end-to-end: the shim must forward argv byte-exact,
+/// even bytes that aren't valid UTF-8.
+fn run_shim(tool: &str, args: Vec<OsString>) -> ! {
     let r = resolve_current(true);
     let bin = jdk::tool_bin(&r.home, tool);
     if !bin.is_file() {
@@ -44,17 +47,21 @@ fn run_shim(tool: &str, args: Vec<String>) -> ! {
 fn main() {
     platform::init();
 
-    let mut args: Vec<String> = env::args().collect();
+    // args_os, not args: env::args() PANICS on argv that isn't valid UTF-8.
+    // Shims forward the raw bytes; the CLI degrades lossily (an invalid spec
+    // just fails to match, with a normal error).
+    let mut args_os: Vec<OsString> = env::args_os().collect();
     // file_stem so "java.exe" dispatches as "java" on Windows
-    let invoked = Path::new(&args[0])
+    let invoked = Path::new(&args_os[0])
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("jolta")
         .to_string();
 
     if invoked != "jolta" {
-        run_shim(&invoked, args.split_off(1));
+        run_shim(&invoked, args_os.split_off(1));
     }
+    let args: Vec<String> = args_os.iter().map(|a| a.to_string_lossy().into_owned()).collect();
 
     let cmd = args.get(1).cloned().unwrap_or_else(|| "help".into());
     let mut rest: Vec<String> = args.iter().skip(2).cloned().collect();

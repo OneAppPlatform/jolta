@@ -34,6 +34,12 @@ pub fn set_fresh() {
     let _ = fs::remove_dir_all(jolta_home().join("remote-cache"));
 }
 
+/// Mirror bases are filesystem paths pasted into URLs; curl rejects literal
+/// spaces, so percent-encode them (the only URL-hostile char paths commonly have).
+fn encode_spaces(s: &str) -> String {
+    s.replace(' ', "%20")
+}
+
 fn cache_key(s: &str) -> String {
     // djb2 — plenty for filename dedup of URLs
     let mut h: u64 = 5381;
@@ -214,7 +220,7 @@ fn vendor_url(vendor: &str, major: u32) -> String {
     // internal mirror using a flat, predictable layout instead of the three
     // different vendor URL schemes (see issue #2).
     if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
-        let base = base.trim_end_matches('/');
+        let base = encode_spaces(base.trim_end_matches('/'));
         return format!("{base}/{vendor}/{major}/{os}-{arch}.{ext}");
     }
     match vendor {
@@ -426,6 +432,14 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     }
 
     let major = major_of(version).unwrap_or_else(|| die(&format!("cannot parse version '{version}'")));
+    // Validate before taking the install lock: vendor_url() dies on unknown
+    // vendors (e.g. "openjdk", pinnable but not downloadable).
+    if !INSTALLABLE_VENDORS.contains(&vendor) {
+        die(&format!(
+            "don't know how to download '{vendor}' builds (downloadable distros: {})",
+            INSTALLABLE_VENDORS.join(", ")
+        ));
+    }
     // Serialize concurrent installs of the same distro+version (parallel
     // builds can fire several shims at once); losers wait, then re-check.
     let _ = fs::create_dir_all(jolta_home().join("cache"));
@@ -475,18 +489,33 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
         }
     }
 
+    // From here to the end the lock is held: report errors and return Err
+    // instead of die()ing — exit() skips Drop, which would leak the lock and
+    // stall the next install of this spec for up to ten minutes.
+    let fail = |msg: &str| {
+        eprintln!("{} {msg}", paint("31", "jolta:", true));
+    };
     let url = if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
         let (os, arch, ext) = platform();
-        format!("{}/{vendor}/{version}/{os}-{arch}.{ext}", base.trim_end_matches('/'))
+        format!("{}/{vendor}/{version}/{os}-{arch}.{ext}", encode_spaces(base.trim_end_matches('/')))
     } else if is_exact(version) {
-        exact_url(vendor, version).unwrap_or_else(|| {
-            die(&format!(
-                "cannot find {vendor} {version} at the vendor (is that point release published for this platform?)"
-            ))
-        })
+        match exact_url(vendor, version) {
+            Some(u) => u,
+            None => {
+                fail(&format!(
+                    "cannot find {vendor} {version} at the vendor (is that point release published for this platform?)"
+                ));
+                return Err(());
+            }
+        }
     } else if vendor == "zulu" {
-        zulu_url(version, true)
-            .unwrap_or_else(|| die(&format!("Azul metadata API returned nothing for zulu {version}")))
+        match zulu_url(version, true) {
+            Some(u) => u,
+            None => {
+                fail(&format!("Azul metadata API returned nothing for zulu {version}"));
+                return Err(());
+            }
+        }
     } else {
         vendor_url(vendor, major)
     };
@@ -522,20 +551,29 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
         return Err(());
     }
     eprintln!("  {} extracted", paint("32", "✓", true));
-    let top = fs::read_dir(&extract)
+    let Some(top) = fs::read_dir(&extract)
         .ok()
         .and_then(|mut e| e.find_map(|x| x.ok().map(|x| x.path()).filter(|p| p.is_dir())))
-        .unwrap_or_else(|| die("unexpected archive layout"));
+    else {
+        fail("unexpected archive layout (no top-level directory)");
+        return Err(());
+    };
 
     let home = managed_home(&top);
-    let full = jdk_version(&home).unwrap_or_else(|| die("no release file in extracted JDK"));
+    let Some(full) = jdk_version(&home) else {
+        fail("no release file in extracted JDK");
+        return Err(());
+    };
 
     let dest = jolta_home().join("jdks").join(format!("{vendor}-{full}"));
     if dest.is_dir() {
         println!("  {} {vendor} {full} is already installed", ok_mark());
     } else {
         let _ = fs::create_dir_all(jolta_home().join("jdks"));
-        fs::rename(&top, &dest).unwrap_or_else(|e| die(&format!("cannot move JDK into place: {e}")));
+        if let Err(e) = fs::rename(&top, &dest) {
+            fail(&format!("cannot move JDK into place: {e}"));
+            return Err(());
+        }
         println!(
             "  {} installed {} {} {}",
             ok_mark(),

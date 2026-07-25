@@ -121,7 +121,9 @@ pub fn cmd_reshim() {
         let Ok(entries) = fs::read_dir(home.join("bin")) else { continue };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name.to_string_lossy().starts_with("jolta") || !platform::is_shimmable(&entry.path()) {
+            let name_str = name.to_string_lossy();
+            // skip our own binary, dotfiles (.DS_Store & co), and non-executables
+            if name_str.starts_with("jolta") || name_str.starts_with('.') || !platform::is_shimmable(&entry.path()) {
                 continue;
             }
             let link = shims.join(&name);
@@ -428,7 +430,7 @@ pub fn cmd_hook(shell: &str) {
             "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  [ \"$_s\" = \"${{_JOLTA_STAMP:-}}\" ] && return\n  _JOLTA_STAMP=$_s\n  rehash\n  _jolta_update_java_home\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _jolta_update_java_home\nadd-zsh-hook precmd _jolta_sync\n_jolta_sync\n_jolta_update_java_home\n"
         ),
         "bash" => print!(
-            "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  if [ \"$_s\" != \"${{_JOLTA_STAMP:-}}\" ]; then\n    _JOLTA_STAMP=$_s\n    hash -r\n    _JOLTA_LAST_PWD=$PWD\n    _jolta_update_java_home\n    return\n  fi\n  [ \"${{_JOLTA_LAST_PWD:-}}\" = \"$PWD\" ] && return\n  _JOLTA_LAST_PWD=$PWD\n  _jolta_update_java_home\n}}\ncase \";$PROMPT_COMMAND;\" in\n  *\";_jolta_sync;\"*) ;;\n  *) PROMPT_COMMAND=\"_jolta_sync${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\nesac\n_jolta_sync\n"
+            "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  if [ \"$_s\" != \"${{_JOLTA_STAMP:-}}\" ]; then\n    _JOLTA_STAMP=$_s\n    hash -r\n    _JOLTA_LAST_PWD=$PWD\n    _jolta_update_java_home\n    return\n  fi\n  [ \"${{_JOLTA_LAST_PWD:-}}\" = \"$PWD\" ] && return\n  _JOLTA_LAST_PWD=$PWD\n  _jolta_update_java_home\n}}\ncase \";${{PROMPT_COMMAND:-}};\" in\n  *\";_jolta_sync;\"*) ;;\n  *) PROMPT_COMMAND=\"_jolta_sync${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\nesac\n_jolta_sync\n"
         ),
         "powershell" | "pwsh" => print!(
             "function global:__jolta_update_java_home {{\n  $jh = & jolta home 2>$null\n  if ($LASTEXITCODE -eq 0 -and $jh) {{ $env:JAVA_HOME = \"$jh\" }}\n  else {{ Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue }}\n}}\n$global:__jolta_prev_prompt = $function:prompt\nfunction global:prompt {{ __jolta_update_java_home; & $global:__jolta_prev_prompt }}\n__jolta_update_java_home\n"
@@ -834,6 +836,11 @@ fn minimal_spec(pick: &str, all: &[String]) -> String {
 }
 
 pub fn cmd_uninstall(name: &str) {
+    // The argument is a spec or a directory entry inside jdks/, never a path:
+    // reject separators and dot-dirs so "../cache" can't escape the jdks dir.
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        die(&format!("'{name}' is not a jolta-managed JDK name (see 'jolta list')"));
+    }
     let jdks = jolta_home().join("jdks");
     // A literal directory name (temurin-25.0.3) always works; otherwise
     // accept the same spec forms every other command takes (25, 25.0.3,

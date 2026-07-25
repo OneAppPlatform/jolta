@@ -36,7 +36,12 @@ pub fn best_match(
                 continue;
             }
         }
-        if v == version {
+        // Exact match tolerates build metadata: a pin of "21.0.2+13" (as
+        // vendors publish it) must match an installed "21.0.2" and vice versa.
+        fn base(s: &str) -> &str {
+            s.split('+').next().unwrap_or(s)
+        }
+        if base(v) == base(version) {
             exact = Some(home);
         }
         let k = numkey(v);
@@ -66,13 +71,17 @@ pub fn clear_cache() {
 /// Resolve a version spec to a JDK home.
 /// NOTE: java_home -v is unusable as a fallback — it exits 0 and prints its
 /// default JDK even when nothing matches — so matching is strict, list-based.
+/// Only jolta-managed homes are cached: system/env-registered JDKs can be
+/// deregistered without the directory disappearing (e.g. unsetting a
+/// JAVA_HOME_<major> variable), which a has_java check can't detect.
 pub fn resolve(spec: &str) -> Option<PathBuf> {
     let (vendor, version) = parse_spec(spec);
     let major = major_of(&version)?;
+    let managed_root = jolta_home().join("jdks");
     let cache = cache_path(spec);
     if let Ok(cached) = fs::read_to_string(&cache) {
         let home = PathBuf::from(cached.trim());
-        if has_java(&home) {
+        if home.starts_with(&managed_root) && has_java(&home) {
             return Some(home);
         }
         let _ = fs::remove_file(&cache);
@@ -81,21 +90,28 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
     if !has_java(&home) {
         return None;
     }
-    let _ = fs::create_dir_all(jolta_home().join("cache"));
-    let _ = fs::write(&cache, format!("{}\n", home.display()));
+    if home.starts_with(&managed_root) {
+        let _ = fs::create_dir_all(jolta_home().join("cache"));
+        let _ = fs::write(&cache, format!("{}\n", home.display()));
+    }
     Some(home)
 }
 
 /// "java=21.0.2-tem" -> "temurin@21.0.2". Unknown/absent suffixes become
 /// vendorless specs (best matching installed distro).
+/// Parsing matches sdkman's own normalisation: strip from the first '#' to
+/// end of line, then delete ALL whitespace — so "java = 21.0.2-tem # ci"
+/// is legal there and must be here too (CRLF falls out for free).
 fn parse_sdkmanrc(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
-        }
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        let line: String = line
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         let Some(value) = line.strip_prefix("java=") else { continue };
-        let value = value.trim();
         if value.is_empty() {
             continue;
         }
@@ -126,6 +142,19 @@ pub struct Pin {
     pub source: String,
 }
 
+/// First spec token of a version file: skips blank and `#`-comment lines,
+/// strips a UTF-8 BOM, and takes the first whitespace-separated token (so
+/// "21 # team standard" pins 21). Windows editors add BOMs and humans add
+/// blank lines and comments — none of that should silently unpin a project.
+/// A `#` glued to the version ("21#x") is kept and fails resolution loudly.
+fn first_spec_line(text: &str) -> Option<String> {
+    text.trim_start_matches('\u{feff}')
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .find(|t| !t.starts_with('#'))
+        .map(str::to_string)
+}
+
 /// Find the nearest .java-version walking up from cwd; then default file.
 pub fn read_pin() -> Pin {
     if let Ok(v) = env::var("JOLTA_JAVA_VERSION") {
@@ -141,8 +170,7 @@ pub fn read_pin() -> Pin {
         let f = dir.join(".java-version");
         if f.is_file() {
             if let Ok(text) = fs::read_to_string(&f) {
-                let spec = text.lines().next().unwrap_or("").trim().to_string();
-                if !spec.is_empty() {
+                if let Some(spec) = first_spec_line(&text) {
                     return Pin {
                         spec: Some(spec),
                         source: f.display().to_string(),
@@ -169,8 +197,7 @@ pub fn read_pin() -> Pin {
     }
     let default = jolta_home().join("default");
     if let Ok(text) = fs::read_to_string(&default) {
-        let spec = text.lines().next().unwrap_or("").trim().to_string();
-        if !spec.is_empty() {
+        if let Some(spec) = first_spec_line(&text) {
             return Pin {
                 spec: Some(spec),
                 source: format!("jolta default ({})", default.display()),

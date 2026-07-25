@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::paths::{home_dir, jolta_home};
+use crate::paths::jolta_home;
 
 /// JDK distros jolta knows how to download. The default is temurin.
 pub const INSTALLABLE_VENDORS: [&str; 5] = ["temurin", "corretto", "graalvm", "oracle", "zulu"];
@@ -173,10 +173,12 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
             }
         }
     }
-    let mut bases = vec![
-        PathBuf::from("/usr/lib/jvm"),
-        home_dir().join(".sdkman/candidates/java"),
-    ];
+    let mut bases = vec![PathBuf::from("/usr/lib/jvm")];
+    // The .sdkman scan is best-effort: shims must keep working in HOME-less
+    // environments (cron, containers), so never die over a missing HOME here.
+    if let Ok(h) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        bases.push(PathBuf::from(h).join(".sdkman/candidates/java"));
+    }
     // Windows installers drop JDKs under Program Files vendor directories
     for pf_var in ["ProgramFiles", "ProgramFiles(x86)"] {
         if let Ok(pf) = std::env::var(pf_var) {
