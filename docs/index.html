@@ -355,7 +355,8 @@ keeping the surgery coherent across version switches and other tools'
 <code>PATH</code> edits is its own class of bugs. Jolta's shims re-resolve from the
 working directory on <em>every</em> invocation, so the same project gets the same
 JDK everywhere — terminal, CI, cron, IDE — with zero shell integration required.
-The hook is optional polish, not a load-bearing wall.</p>
+The shell hook only keeps <code>JAVA_HOME</code> exported for tools that read it;
+everything else works without it.</p>
 
 <h2 id="uninstall">Uninstall</h2>
 <pre><code>jolta implode</code></pre>
