@@ -98,6 +98,8 @@ case "\${1:-}" in
   --fake-pwd) pwd; exit 0 ;;
   --fake-sig) kill -s SEGV \$\$ ;;
   --fake-nested) exec javac --nested-probe ;;
+  --fake-sleep) sleep 30; exit 0 ;;
+  --fake-path) echo "\$PATH"; exit 0 ;;
 esac
 echo "fake-$tool $version dir=\$(cd "\$(dirname "\$0")/.." && pwd -P) JAVA_HOME=\${JAVA_HOME:-unset}"
 for a in "\$@"; do printf 'arg=[%s]\n' "\$a"; done
@@ -1097,6 +1099,130 @@ check_rc "vendor-sticky auto-install succeeds" 0 "$rc"
   && ok "auto-install kept the installed vendor (corretto)" \
   || bad "auto-install kept the installed vendor (corretto)" "     $(ls -d "$JOLTA_HOME"/jdks/*96.0.9* 2>/dev/null)"
 jolta uninstall corretto-96.0.9 >/dev/null 2>&1
+
+# =================================================================
+section "L. open-issue immunities & fixes (volta/jenv/sdkman/mise live bugs)"
+# =================================================================
+
+# GraalVM bundles node/npm — shimming them hijacks nvm/volta (jenv #294, OPEN)
+printf '#!/bin/sh\necho graal-node\n' > "$JOLTA_HOME/jdks/graalvm-94.0.2/bin/node"
+chmod +x "$JOLTA_HOME/jdks/graalvm-94.0.2/bin/node"
+jolta reshim >/dev/null
+[ ! -e "$JOLTA_HOME/shims/node" ] \
+  && ok "bundled node is not shimmed (no toolchain hijack)" \
+  || bad "bundled node is not shimmed (no toolchain hijack)" "     shims/node created"
+[ -e "$JOLTA_HOME/shims/java" ] || bad "java shim survived denylist reshim" "     gone"
+
+# a renamed/copied binary is the CLI, not a confused shim (mise PR #11277)
+cp "$JOLTA_BIN" "$work/jolta-nightly"
+jolta_rc "$work/jolta-nightly" version
+check_rc "renamed binary acts as CLI" 0 "$rc"
+check "renamed binary prints its version" "jolta " "$out"
+
+# shims exec, never spawn-and-wait (volta #36 — open since 2017)
+cd "$work/d"
+java --fake-sleep >/dev/null 2>&1 &
+shimpid=$!
+sleep 0.3
+pscmd=$(ps -o command= -p "$shimpid" 2>/dev/null)
+kill "$shimpid" 2>/dev/null; wait "$shimpid" 2>/dev/null
+[ -n "$pscmd" ] && contains "bin/java --fake-sleep" "$pscmd" && ! contains "$JOLTA_BIN" "$pscmd" \
+  && ok "shim execs (no jolta parent left in the process tree)" \
+  || bad "shim execs (no jolta parent left in the process tree)" "     ps: $pscmd"
+
+# argv is never sniffed for version context (jenv #151, OPEN)
+mkdir -p "$work/k3" && echo 96 > "$work/k3/.java-version" && touch "$work/k3/app.jar"
+check "path-looking args don't re-root resolution" "temurin-97.0.1" \
+  "$(java "$work/k3/app.jar" 2>&1)"
+
+# shim leaves the child's PATH byte-identical (jenv #419, OPEN)
+check_eq "shim does not touch PATH" "$PATH" "$(java --fake-path 2>/dev/null)"
+
+# a newer build is picked up with no alias to go stale (jenv #345, OPEN)
+mk_jdk temurin-53.0.1 53.0.1 "Eclipse Adoptium"
+mkdir -p "$work/k4" && cd "$work/k4" && echo 53 > .java-version
+jolta home >/dev/null 2>&1                      # warm any caches on 53.0.1
+mk_jdk temurin-53.0.2 53.0.2 "Eclipse Adoptium"
+jolta reshim >/dev/null
+check "new build wins immediately after reshim" "temurin-53.0.2" "$(jolta home 2>/dev/null)"
+
+# symlinked external JDK in sdkman candidates resolves (sdkman #1140, OPEN)
+ln -s "$work/outside-91" "$fakehome/.sdkman/candidates/java/91.0.3-ext"
+check "symlinked candidate dir is discovered" "91.0.3" \
+  "$(HOME="$fakehome" jolta jdks 2>/dev/null | grep '^91	' || true)"
+
+# hooks are silent on stdout — no "Using java version..." noise (sdkman #1158/#983, OPEN)
+out=$(bash --noprofile --norc -c '
+  export PATH="'"$JOLTA_HOME/shims:$bindir"':$PATH" JOLTA_HOME="'"$JOLTA_HOME"'"
+  eval "$(jolta hook bash)"
+  cd "'"$work"'/d"  && eval "$PROMPT_COMMAND"
+  cd "'"$work"'/g4" && eval "$PROMPT_COMMAND"' 2>/dev/null)
+check_eq "hook produces zero stdout across cd's" "" "$out"
+
+# checksum sidecar verification (volta #2075 — Volta still verifies nothing)
+publish temurin 49 49.0.1
+shasum -a 256 "$mirror/temurin/49/$plat.tar.gz" | awk '{print $1}' \
+  > "$mirror/temurin/49/$plat.tar.gz.sha256"
+jolta_rc env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 49
+check_rc "install with good sha256 sidecar succeeds" 0 "$rc"
+check "checksum verification is reported" "checksum verified" "$out"
+jolta uninstall temurin-49.0.1 >/dev/null 2>&1
+
+publish temurin 48 48.0.1
+printf '%064d\n' 0 > "$mirror/temurin/48/$plat.tar.gz.sha256"
+jolta_rc env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 48
+check_rc "install with bad sha256 sidecar fails" nonzero "$rc"
+check "mismatch error mentions checksum" "checksum mismatch" "$out"
+[ ! -d "$JOLTA_HOME/jdks/temurin-48.0.1" ] \
+  && ok "checksum failure leaves no partial JDK" \
+  || bad "checksum failure leaves no partial JDK" "     partial dir exists"
+no_stale_locks && ok "checksum failure leaves no stale lock" \
+  || bad "checksum failure leaves no stale lock" "     $(ls "$JOLTA_HOME"/cache/install-*.lock)"
+
+# a JDK whose java can't exec must fail at install, not at first use (mise #9679)
+publish temurin 47 47.0.1
+stage="$work/stage-47.0.1"
+head -c 64 /dev/urandom > "$stage/jdk-root/bin/java"
+chmod +x "$stage/jdk-root/bin/java"
+tar -C "$stage" -czf "$mirror/temurin/47/$plat.tar.gz" jdk-root
+jolta_rc env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 47
+check_rc "unexecutable java fails at install time" nonzero "$rc"
+check "exec-probe error is actionable" "cannot execute" "$out"
+[ ! -d "$JOLTA_HOME/jdks/temurin-47.0.1" ] \
+  && ok "exec-probe failure leaves no partial JDK" \
+  || bad "exec-probe failure leaves no partial JDK" "     partial dir exists"
+
+# doctor: ~/.mavenrc setting JAVA_HOME bypasses jolta for mvn (jenv #232/#78, OPEN)
+mkdir -p "$work/mvnhome"
+printf 'JAVA_HOME=/opt/somewhere-else\n' > "$work/mvnhome/.mavenrc"
+cd "$work/d"
+out=$(HOME="$work/mvnhome" jolta doctor 2>&1)
+check "doctor flags a JAVA_HOME-setting mavenrc" "mavenrc" "$out"
+
+# doctor: wrong-architecture JDK is diagnosed, not silent (jenv #396, OPEN)
+mk_jdk temurin-46.0.1 46.0.1 "Eclipse Adoptium"
+case "$(uname -s)/$(uname -m)" in
+  Darwin/arm64)  printf '\317\372\355\376\007\000\000\001\000\000\000\000\000\000\000\000\000\000\000\000' ;;
+  Darwin/*)      printf '\317\372\355\376\014\000\000\001\000\000\000\000\000\000\000\000\000\000\000\000' ;;
+  Linux/aarch64) printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000\002\000\076\000' ;;
+  *)             printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000\002\000\267\000' ;;
+esac > "$JOLTA_HOME/jdks/temurin-46.0.1/bin/java"
+chmod +x "$JOLTA_HOME/jdks/temurin-46.0.1/bin/java"
+mkdir -p "$work/k5" && cd "$work/k5" && echo 46 > .java-version
+out=$(jolta doctor 2>&1)
+check "doctor flags a wrong-arch java binary" "arch" "$out"
+
+# arm64 macs fall back to the x64 build when no arm64 asset exists (volta #1860)
+if [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ]; then
+  publish temurin 45 45.0.1
+  mv "$mirror/temurin/45/$plat.tar.gz" "$mirror/temurin/45/macos-x64.tar.gz"
+  jolta_rc env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 45
+  check_rc "x64 fallback install succeeds on arm64" 0 "$rc"
+  check "fallback announces Rosetta" "Rosetta" "$out"
+  jolta uninstall temurin-45.0.1 >/dev/null 2>&1
+else
+  echo "skip x64-fallback test (not an arm64 mac)"
+fi
 
 # =================================================================
 echo

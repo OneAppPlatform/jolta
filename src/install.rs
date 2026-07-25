@@ -2,16 +2,21 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::commands::cmd_reshim;
 use crate::download::download;
-use crate::jdk::{is_exact, jdk_version, major_of, managed_home, INSTALLABLE_VENDORS};
+use crate::jdk::{is_exact, jdk_version, major_of, managed_home, tool_bin, INSTALLABLE_VENDORS};
 use crate::paths::jolta_home;
 use crate::resolve::resolve;
 use crate::ui::{bold, cyan, die, dim, ok_mark, paint};
+
+/// Old majors often ship no macOS arm64 build (JDK 8/11 on Apple Silicon):
+/// set during the one-shot x64 retry so URL builders pick the Rosetta build.
+static FORCE_X64: AtomicBool = AtomicBool::new(false);
 
 fn platform() -> (&'static str, &'static str, &'static str) {
     let os = match env::consts::OS {
@@ -19,13 +24,34 @@ fn platform() -> (&'static str, &'static str, &'static str) {
         "windows" => "windows",
         _ => "linux",
     };
-    let arch = match env::consts::ARCH {
-        "aarch64" => "aarch64",
-        "x86_64" => "x64",
-        other => die(&format!("unsupported architecture: {other}")),
+    let arch = if FORCE_X64.load(Ordering::Relaxed) {
+        "x64"
+    } else {
+        match env::consts::ARCH {
+            "aarch64" => "aarch64",
+            "x86_64" => "x64",
+            other => die(&format!("unsupported architecture: {other}")),
+        }
     };
     let ext = if os == "windows" { "zip" } else { "tar.gz" };
     (os, arch, ext)
+}
+
+/// Alpine and friends: glibc JDK builds "install" fine and then die in the
+/// loader (sdkman #1133, mise #9679). Detect musl so URL builders can ask
+/// for musl variants where vendors publish them.
+#[cfg(target_os = "linux")]
+fn is_musl() -> bool {
+    fs::read_dir("/lib")
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().starts_with("ld-musl-"))
+}
+#[cfg(not(target_os = "linux"))]
+fn is_musl() -> bool {
+    false
 }
 
 /// --fresh (or JOLTA_FRESH=1): drop the remote-metadata cache so this
@@ -94,14 +120,34 @@ fn curl_text(url: &str) -> Option<String> {
     if let Some(hit) = remote_cache_get(&format!("body:{url}")) {
         return if hit.is_empty() { None } else { Some(hit) };
     }
+    let body = curl_text_uncached(url);
+    remote_cache_put(&format!("body:{url}"), body.as_deref().unwrap_or(""));
+    body
+}
+
+fn curl_text_uncached(url: &str) -> Option<String> {
     let o = Command::new("curl").args(["-fsSL"]).arg(url).output().ok()?;
-    let body = if o.status.success() {
+    if o.status.success() {
         Some(String::from_utf8_lossy(&o.stdout).into_owned())
     } else {
         None
-    };
-    remote_cache_put(&format!("body:{url}"), body.as_deref().unwrap_or(""));
-    body
+    }
+}
+
+/// SHA-256 of a file via the system tools (shasum on macOS, sha256sum on
+/// Linux) — no hash crate, matching the no-dependency ethos.
+fn sha256_file(path: &Path) -> Option<String> {
+    for (cmd, args) in [("shasum", &["-a", "256"][..]), ("sha256sum", &[][..])] {
+        if let Ok(o) = Command::new(cmd).args(args).arg(path).output() {
+            if o.status.success() {
+                return String::from_utf8_lossy(&o.stdout)
+                    .split_whitespace()
+                    .next()
+                    .map(|s| s.to_ascii_lowercase());
+            }
+        }
+    }
+    None
 }
 
 /// Every string value for `key` in a JSON blob. Primitive scraping, no parser
@@ -152,6 +198,7 @@ fn bump_last(version: &str) -> String {
 /// latest-of-major and exact versions. Filters out JavaFX/CRaC variant builds.
 fn zulu_url(version: &str, latest: bool) -> Option<String> {
     let (os, arch, ext) = platform();
+    let os = if os == "linux" && is_musl() { "linux-musl" } else { os };
     let latest_q = if latest { "&latest=true" } else { "" };
     let url = format!(
         "https://api.azul.com/metadata/v1/zulu/packages/?java_version={version}&os={os}&arch={arch}&archive_type={ext}&java_package_type=jdk&javafx_bundled=false&release_status=ga{latest_q}"
@@ -174,7 +221,13 @@ fn exact_url(vendor: &str, version: &str) -> Option<String> {
                 "https://api.adoptium.net/v3/info/release_names?release_type=ga&version={range}"
             ))?;
             let release = json_first_array_string(&names, "releases")?;
-            let os = if os == "macos" { "mac" } else { os };
+            let os = if os == "macos" {
+                "mac"
+            } else if os == "linux" && is_musl() {
+                "alpine-linux"
+            } else {
+                os
+            };
             Some(format!(
                 "https://api.adoptium.net/v3/binary/version/{}/{os}/{arch}/jdk/hotspot/normal/eclipse",
                 release.replace('+', "%2B")
@@ -183,23 +236,46 @@ fn exact_url(vendor: &str, version: &str) -> Option<String> {
         "corretto" => {
             // corretto tags are 5-part (21.0.2.13.1); some tagged builds never
             // reach the CDN, so probe every matching tag until one answers
-            let tags = curl_text(&format!(
-                "https://api.github.com/repos/corretto/corretto-{major}/releases?per_page=100"
-            ))?;
             let (osname, suffix) = match os {
                 "macos" => ("macosx", format!(".{ext}")),
                 "windows" => ("windows", format!("-jdk.{ext}")),
                 _ => ("linux", format!(".{ext}")),
             };
-            json_strings(&tags, "tag_name")
-                .into_iter()
-                .filter(|t| t == version || t.starts_with(&format!("{version}.")))
-                .map(|tag| {
-                    format!(
-                        "https://corretto.aws/downloads/resources/{tag}/amazon-corretto-{tag}-{osname}-{arch}{suffix}"
-                    )
-                })
+            let mk = |tag: &str| {
+                format!(
+                    "https://corretto.aws/downloads/resources/{tag}/amazon-corretto-{tag}-{osname}-{arch}{suffix}"
+                )
+            };
+            // paginate: exact pins of older releases fall past the first 100
+            // tags (sdkman #1300 class)
+            let mut tags = Vec::new();
+            for page in 1..=3 {
+                let Some(body) = curl_text(&format!(
+                    "https://api.github.com/repos/corretto/corretto-{major}/releases?per_page=100&page={page}"
+                )) else {
+                    break;
+                };
+                let t = json_strings(&body, "tag_name");
+                let n = t.len();
+                tags.extend(t);
+                if n < 100 {
+                    break;
+                }
+            }
+            tags.iter()
+                .filter(|t| *t == version || t.starts_with(&format!("{version}.")))
+                .map(|t| mk(t))
                 .find(|u| url_ok(u))
+                // ancient releases age out of even paginated listings; a full
+                // 4/5-part version IS the tag — probe it directly
+                .or_else(|| {
+                    if version.split('.').count() >= 4 {
+                        let u = mk(version);
+                        url_ok(&u).then_some(u)
+                    } else {
+                        None
+                    }
+                })
         }
         "oracle" => Some(format!(
             "https://download.oracle.com/java/{major}/archive/jdk-{version}_{os}-{arch}_bin.{ext}"
@@ -225,7 +301,13 @@ fn vendor_url(vendor: &str, major: u32) -> String {
     }
     match vendor {
         "temurin" => {
-            let os = if os == "macos" { "mac" } else { os };
+            let os = if os == "macos" {
+                "mac"
+            } else if os == "linux" && is_musl() {
+                "alpine-linux"
+            } else {
+                os
+            };
             format!("https://api.adoptium.net/v3/binary/latest/{major}/ga/{os}/{arch}/jdk/hotspot/normal/eclipse")
         }
         "corretto" => format!("https://corretto.aws/downloads/latest/amazon-corretto-{major}-{arch}-{os}-jdk.{ext}"),
@@ -440,6 +522,13 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
             INSTALLABLE_VENDORS.join(", ")
         ));
     }
+    // musl systems: only temurin and zulu publish musl builds; a glibc JDK
+    // would install fine and then die in the loader on first use.
+    if is_musl() && !matches!(vendor, "temurin" | "zulu") && env::var("JOLTA_DOWNLOAD_BASE").is_err() {
+        die(&format!(
+            "'{vendor}' publishes no musl builds (this looks like Alpine) — use temurin or zulu"
+        ));
+    }
     // Serialize concurrent installs of the same distro+version (parallel
     // builds can fire several shims at once); losers wait, then re-check.
     let _ = fs::create_dir_all(jolta_home().join("cache"));
@@ -495,29 +584,19 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     let fail = |msg: &str| {
         eprintln!("{} {msg}", paint("31", "jolta:", true));
     };
-    let url = if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
-        let (os, arch, ext) = platform();
-        format!("{}/{vendor}/{version}/{os}-{arch}.{ext}", encode_spaces(base.trim_end_matches('/')))
-    } else if is_exact(version) {
-        match exact_url(vendor, version) {
-            Some(u) => u,
-            None => {
-                fail(&format!(
-                    "cannot find {vendor} {version} at the vendor (is that point release published for this platform?)"
-                ));
-                return Err(());
-            }
+    // URL construction is re-runnable so the arm64→x64 fallback below can
+    // rebuild every vendor's URL against the alternate arch.
+    let build_url = || -> Option<String> {
+        if let Ok(base) = env::var("JOLTA_DOWNLOAD_BASE") {
+            let (os, arch, ext) = platform();
+            Some(format!("{}/{vendor}/{version}/{os}-{arch}.{ext}", encode_spaces(base.trim_end_matches('/'))))
+        } else if is_exact(version) {
+            exact_url(vendor, version)
+        } else if vendor == "zulu" {
+            zulu_url(version, true)
+        } else {
+            Some(vendor_url(vendor, major))
         }
-    } else if vendor == "zulu" {
-        match zulu_url(version, true) {
-            Some(u) => u,
-            None => {
-                fail(&format!("Azul metadata API returned nothing for zulu {version}"));
-                return Err(());
-            }
-        }
-    } else {
-        vendor_url(vendor, major)
     };
     // Extract inside JOLTA_HOME so the final rename into jdks/ never crosses
     // filesystems (/tmp is tmpfs on many Linux distros; rename(2) can't span
@@ -528,14 +607,53 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
 
     let tarball = tmp.join("jdk.archive");
     let label = format!("{vendor}@{version}");
-    if !download(&url, &tarball, &label) {
-        eprintln!(
-            "{} is {vendor} {version} published for {}/{}? ({url})",
-            paint("2", "hint:", true),
+    let mut url = build_url();
+    let mut downloaded = match &url {
+        Some(u) => download(u, &tarball, &label),
+        None => false,
+    };
+    // Old majors ship no macOS arm64 build (JDK 8/11 on Apple Silicon, volta
+    // #1860 family): retry once as x64, which runs fine under Rosetta.
+    if !downloaded && env::consts::OS == "macos" && env::consts::ARCH == "aarch64" {
+        FORCE_X64.store(true, Ordering::Relaxed);
+        let retry = build_url();
+        if retry.is_some() && retry != url {
+            eprintln!(
+                "{} no arm64 build found — retrying with the x64 build (runs under Rosetta)",
+                paint("33", "jolta:", true)
+            );
+            url = retry;
+            downloaded = download(url.as_deref().unwrap(), &tarball, &label);
+        }
+        FORCE_X64.store(false, Ordering::Relaxed);
+    }
+    let Some(url) = url.filter(|_| downloaded) else {
+        fail(&format!(
+            "cannot fetch {vendor} {version} — is it published for {}/{}?",
             env::consts::OS,
             env::consts::ARCH
-        );
+        ));
         return Err(());
+    };
+
+    // Optional integrity sidecar: an "<asset>.sha256" published next to the
+    // asset is verified when present (volta #2075 — Volta verifies nothing).
+    if let Some(sums) = curl_text_uncached(&format!("{url}.sha256")) {
+        let want = sums.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        if want.len() == 64 {
+            match sha256_file(&tarball) {
+                Some(got) if got == want => {
+                    eprintln!("  {} checksum verified", paint("32", "✓", true));
+                }
+                Some(got) => {
+                    fail(&format!(
+                        "checksum mismatch for {url}\n  expected {want}\n  got      {got} — refusing to install"
+                    ));
+                    return Err(());
+                }
+                None => {}
+            }
+        }
     }
 
     let extract = tmp.join("x");
@@ -575,6 +693,15 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
                 }
             }
         }
+    }
+    // A wrong-libc/arch build "installs" cleanly and then every shim dies in
+    // the loader with a cryptic ENOENT (mise #9679 on Alpine): prove the JVM
+    // actually runs before promoting it. Spawn errors AND nonzero exits both
+    // count — macOS "helpfully" execs unknown formats via sh, which then fails.
+    let probe = Command::new(tool_bin(&home, "java")).arg("-version").output();
+    if !probe.is_ok_and(|o| o.status.success()) {
+        fail("extracted java cannot execute on this machine (wrong architecture or C library?)");
+        return Err(());
     }
     let Some(full) = jdk_version(&home) else {
         fail("no release file in extracted JDK");

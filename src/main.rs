@@ -69,8 +69,17 @@ fn main() {
         .unwrap_or("jolta")
         .to_string();
 
+    // Shim mode only when the invoked name is actually one of our shims (or
+    // argv[0] lives in the shims dir). A renamed/copied binary — jolta-nightly,
+    // AppImage-style ARGV0 launchers — must behave as the CLI, not die trying
+    // to resolve a JDK tool named after itself (mise PR #11277 class).
     if invoked != "jolta" {
-        run_shim(&invoked, args_os.split_off(1));
+        let shims = paths::shims_dir();
+        let is_shim = shims.join(format!("{invoked}{}", env::consts::EXE_SUFFIX)).exists()
+            || Path::new(&args_os[0]).parent().is_some_and(|p| p == shims);
+        if is_shim {
+            run_shim(&invoked, args_os.split_off(1));
+        }
     }
     let args: Vec<String> = args_os.iter().map(|a| a.to_string_lossy().into_owned()).collect();
 

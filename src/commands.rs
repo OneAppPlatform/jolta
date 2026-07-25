@@ -2,7 +2,7 @@
 
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -127,8 +127,19 @@ pub fn cmd_reshim() {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
+            // Language runtimes some JDKs bundle (GraalVM ships node/python/
+            // ruby): shimming them would hijack the user's other version
+            // managers and then error in every non-GraalVM project (jenv #294).
+            const NO_SHIM: [&str; 15] = [
+                "node", "npm", "npx", "corepack", "js", "python", "python3", "pip", "pip3",
+                "ruby", "gem", "irb", "graalpy", "truffleruby", "lli",
+            ];
             // skip our own binary, dotfiles (.DS_Store & co), and non-executables
-            if name_str.starts_with("jolta") || name_str.starts_with('.') || !platform::is_shimmable(&entry.path()) {
+            if name_str.starts_with("jolta")
+                || name_str.starts_with('.')
+                || NO_SHIM.iter().any(|t| name_str == *t)
+                || !platform::is_shimmable(&entry.path())
+            {
                 continue;
             }
             let link = shims.join(&name);
@@ -985,6 +996,29 @@ pub fn cmd_implode(args: &[String]) {
     println!("{} removed {} — open a new shell to finish. So long!", ok_mark(), home.display());
 }
 
+/// CPU architecture of a compiled binary from its ELF/Mach-O header (8-20
+/// bytes read, no exec). None for scripts and unknown formats — no verdict.
+fn binary_arch(path: &Path) -> Option<&'static str> {
+    let mut f = fs::File::open(path).ok()?;
+    let mut b = [0u8; 20];
+    f.read_exact(&mut b).ok()?;
+    match b[..4] {
+        [0x7f, b'E', b'L', b'F', ..] => match u16::from_le_bytes([b[18], b[19]]) {
+            0x3e => Some("x86_64"),
+            0xb7 => Some("aarch64"),
+            _ => None,
+        },
+        [0xcf, 0xfa, 0xed, 0xfe, ..] => match u32::from_le_bytes([b[4], b[5], b[6], b[7]]) {
+            0x0100_0007 => Some("x86_64"),
+            0x0100_000c => Some("aarch64"),
+            _ => None,
+        },
+        // fat/universal Mach-O runs on either arch
+        [0xca, 0xfe, 0xba, 0xbe, ..] | [0xbe, 0xba, 0xfe, 0xca, ..] => Some("universal"),
+        _ => None,
+    }
+}
+
 pub fn cmd_doctor() -> i32 {
     let mut rc = 0;
     let home = jolta_home();
@@ -1058,7 +1092,7 @@ pub fn cmd_doctor() -> i32 {
             println!("  JAVA_HOME:     {} STALE: {jh}", bad_mark());
             println!(
                 "                 expected {} for this directory",
-                expected.map(|p| p.display().to_string()).unwrap_or_else(|| "<unresolvable>".into())
+                expected.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "<unresolvable>".into())
             );
             println!("                 mvn/gradle use JAVA_HOME directly and will bypass jolta;");
             println!("                 remove any manual \"export JAVA_HOME\" from your shell profile");
@@ -1068,6 +1102,35 @@ pub fn cmd_doctor() -> i32 {
         Err(_) => {
             println!("  JAVA_HOME:     {} not set — shims still work, but mvn/gradle prefer JAVA_HOME;", warn_mark());
             println!("                 run \"jolta setup\" to install the cd hook that keeps it in sync");
+        }
+    }
+
+    // Wrong-architecture JDKs "exist" but can't exec (jenv #396): peek at the
+    // resolved java's binary header. Scripts/fat binaries give no verdict.
+    if let Some(exp) = &expected {
+        if let Some(arch) = binary_arch(&tool_bin(exp, "java")) {
+            let host = env::consts::ARCH;
+            if arch != "universal" && arch != host {
+                println!(
+                    "  binary arch:   {} resolved java is {arch}, but this machine is {host}",
+                    warn_mark()
+                );
+                println!("                 it may fail to exec (or run under emulation); install a native build");
+            }
+        }
+    }
+
+    // Maven reads ~/.mavenrc before anything else; a JAVA_HOME set there
+    // silently bypasses jolta for every mvn run (jenv #232/#78).
+    for rc_file in [home_dir().join(".mavenrc"), PathBuf::from("/etc/mavenrc")] {
+        if let Ok(text) = fs::read_to_string(&rc_file) {
+            if text.contains("JAVA_HOME") {
+                println!(
+                    "  mavenrc:       {} {} sets JAVA_HOME — mvn will ignore jolta's pin",
+                    warn_mark(),
+                    rc_file.display()
+                );
+            }
         }
     }
 
