@@ -102,7 +102,12 @@ pub fn cmd_reshim() {
     // can be hard links or copies, not just symlinks)
     if let Ok(entries) = fs::read_dir(&shims) {
         for entry in entries.flatten() {
-            let _ = fs::remove_file(entry.path());
+            let p = entry.path();
+            // a stray DIRECTORY at a shim path would otherwise silently block
+            // that shim forever (volta #1183)
+            if fs::remove_file(&p).is_err() {
+                let _ = fs::remove_dir_all(&p);
+            }
         }
     }
     let mut count = 0u32;
@@ -409,10 +414,17 @@ pub fn cmd_exec(argv: &[String]) -> ! {
     platform::exec_replace(cmd);
 }
 
+/// Single-quote a value for `eval`-safe shell output: double quotes would let
+/// a hostile path ($(...), backticks) execute during eval (volta #216 class).
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 pub fn cmd_env() {
     let r = resolve_current(true);
-    println!("export JAVA_HOME=\"{}\"", r.home.display());
-    println!("export PATH=\"{}/bin:$PATH\"", r.home.display());
+    let home = r.home.display().to_string();
+    println!("export JAVA_HOME={}", sh_quote(&home));
+    println!("export PATH={}:\"$PATH\"", sh_quote(&format!("{home}/bin")));
 }
 
 pub fn cmd_home() {
@@ -714,6 +726,33 @@ fn managed_targets() -> Vec<(String, u32, String)> {
     best
 }
 
+/// Is a vendor's advertised version newer than the installed JAVA_VERSION?
+/// Distro schemes carry extra build parts (corretto: 21.0.2.13.1 vs the
+/// JDK's 21.0.2), so compare at the installed version's precision — else
+/// every `jolta upgrade` re-downloads the same release forever.
+fn newer_than(latest: &str, installed: &str) -> bool {
+    let prec = installed
+        .split(['+', '-'])
+        .next()
+        .unwrap_or("")
+        .replace(['u', '_'], ".")
+        .split('.')
+        .filter(|s| !s.is_empty())
+        .count()
+        .clamp(1, 4);
+    let key = |v: &str| {
+        let v = v.split(['+', '-']).next().unwrap_or("").replace(['u', '_'], ".");
+        let mut parts = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0).min(999));
+        let mut k = 0u64;
+        for i in 0..4 {
+            let x = if i < prec { parts.next().unwrap_or(0) } else { 0 };
+            k = k * 1_000 + x;
+        }
+        k
+    };
+    key(latest) > key(installed)
+}
+
 pub fn cmd_update() {
     let targets = managed_targets();
     if targets.is_empty() {
@@ -726,7 +765,7 @@ pub fn cmd_update() {
     let mut outdated = 0;
     for (vendor, major, installed) in &targets {
         match latest_remote_version(vendor, *major) {
-            Some(latest) if numkey(&latest) > numkey(installed) => {
+            Some(latest) if newer_than(&latest, installed) => {
                 println!(
                     "  {} {}@{}  {} -> {}",
                     yellow("!"),
@@ -786,7 +825,7 @@ pub fn cmd_upgrade(spec: Option<&str>) {
     let mut upgraded = 0;
     for (vendor, major, installed) in &targets {
         if let Some(latest) = latest_remote_version(vendor, *major) {
-            if numkey(&latest) <= numkey(installed) {
+            if !newer_than(&latest, installed) {
                 println!("  {} {}@{}  {} {}", ok_mark(), cyan(vendor), major, installed, dim("(up to date)"));
                 continue;
             }

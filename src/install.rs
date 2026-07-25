@@ -560,6 +560,22 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     };
 
     let home = managed_home(&top);
+    // Zip archives carry no unix modes and some tars ship 644 tool binaries
+    // (volta #350): make sure everything in bin/ is executable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(entries) = fs::read_dir(home.join("bin")) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if let Ok(md) = p.metadata() {
+                    if md.is_file() && md.permissions().mode() & 0o111 == 0 {
+                        let _ = fs::set_permissions(&p, fs::Permissions::from_mode(md.permissions().mode() | 0o755));
+                    }
+                }
+            }
+        }
+    }
     let Some(full) = jdk_version(&home) else {
         fail("no release file in extracted JDK");
         return Err(());

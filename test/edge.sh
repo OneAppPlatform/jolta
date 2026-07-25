@@ -97,6 +97,7 @@ case "\${1:-}" in
   --fake-streams) echo OUT; echo ERR >&2; exit 0 ;;
   --fake-pwd) pwd; exit 0 ;;
   --fake-sig) kill -s SEGV \$\$ ;;
+  --fake-nested) exec javac --nested-probe ;;
 esac
 echo "fake-$tool $version dir=\$(cd "\$(dirname "\$0")/.." && pwd -P) JAVA_HOME=\${JAVA_HOME:-unset}"
 for a in "\$@"; do printf 'arg=[%s]\n' "\$a"; done
@@ -416,8 +417,8 @@ check_eq "home prints the bare JDK home (stdout-pure)" \
   "$JOLTA_HOME/jdks/temurin-97.0.1" "$(jolta home 2>/dev/null)"
 
 env_out=$(jolta env 2>&1)
-check "env exports JAVA_HOME" "export JAVA_HOME=\"$JOLTA_HOME/jdks/temurin-97.0.1\"" "$env_out"
-check "env prepends bin to PATH" "temurin-97.0.1/bin:\$PATH" "$env_out"
+check "env exports JAVA_HOME" "export JAVA_HOME='$JOLTA_HOME/jdks/temurin-97.0.1'" "$env_out"
+check "env prepends bin to PATH" "temurin-97.0.1/bin':\"\$PATH\"" "$env_out"
 
 check "exec runs tool from resolved JDK via PATH" "fake-java 97.0.1" \
   "$(jolta exec java 2>&1)"
@@ -872,6 +873,230 @@ jolta uninstall temurin-77.0.1 >/dev/null 2>&1
 jolta_rc jolta
 check_rc "bare jolta exits 0" 0 "$rc"
 check "bare jolta prints usage" "Usage" "$out"
+
+# =================================================================
+section "J. issue-mined & real-world JDK layouts"
+# =================================================================
+
+# Many real JDK 8 builds ship NO release file; sdkman installs them under
+# ~/.sdkman/candidates/java/<version>-<vendorsuffix>. Discovery must fall
+# back to the directory name for both version and vendor.
+fakehome="$work/fakehome"
+mkdir -p "$fakehome/.sdkman/candidates/java/72.0.1-tem/bin"
+printf '#!/bin/sh\necho "fake-java 72.0.1 sdkman"\n' > "$fakehome/.sdkman/candidates/java/72.0.1-tem/bin/java"
+chmod +x "$fakehome/.sdkman/candidates/java/72.0.1-tem/bin/java"
+ln -s "$fakehome/.sdkman/candidates/java/72.0.1-tem" "$fakehome/.sdkman/candidates/java/current"
+
+out=$(HOME="$fakehome" jolta jdks 2>/dev/null | grep '^72	' || true)
+check "release-less sdkman JDK is discovered" "72.0.1" "$out"
+check "sdkman dir suffix supplies the vendor" "temurin" "$out"
+count=$(HOME="$fakehome" jolta jdks 2>/dev/null | grep -c '72.0.1-tem' || true)
+check_eq "sdkman 'current' symlink not double-listed" 1 "$count"
+
+mkdir -p "$work/j" && cd "$work/j"
+printf 'java=72.0.1-tem\n' > .sdkmanrc
+check "vendored .sdkmanrc pin resolves the sdkman JDK" "72.0.1-tem" \
+  "$(HOME="$fakehome" jolta home 2>/dev/null)"
+rm .sdkmanrc
+
+# macOS bundle layout inside a scan dir, not just managed (sdkman #1490)
+mkdir -p "$fakehome/.sdkman/candidates/java/61.0.1-zulu/Contents/Home/bin"
+printf 'JAVA_VERSION="61.0.1"\nIMPLEMENTOR="Azul Systems, Inc."\n' \
+  > "$fakehome/.sdkman/candidates/java/61.0.1-zulu/Contents/Home/release"
+printf '#!/bin/sh\necho fake-java-61\n' > "$fakehome/.sdkman/candidates/java/61.0.1-zulu/Contents/Home/bin/java"
+chmod +x "$fakehome/.sdkman/candidates/java/61.0.1-zulu/Contents/Home/bin/java"
+check "bundled JDK in sdkman dir is discovered" "61.0.1-zulu/Contents/Home" \
+  "$(HOME="$fakehome" jolta jdks 2>/dev/null | grep '^61	' || true)"
+
+# release-file oddities (jenv #385, #208): unquoted values and EA versions
+mk_jdk temurin-65.0.1 65.0.1 "Eclipse Adoptium"
+printf 'JAVA_VERSION=65.0.1\n' > "$JOLTA_HOME/jdks/temurin-65.0.1/release"   # no quotes
+mk_jdk temurin-63-ea 63-ea "Eclipse Adoptium"
+mk_jdk temurin-64.0.1 64.0.1 "Eclipse Adoptium"
+rm "$JOLTA_HOME/jdks/temurin-64.0.1/release"    # hand-placed JDK, no release file
+mkdir -p "$work/j3" && cd "$work/j3"
+echo 65 > .java-version
+check "unquoted JAVA_VERSION= in release parses" "temurin-65.0.1" "$(jolta home 2>/dev/null)"
+echo 63 > .java-version
+check "EA-style version (63-ea) matches its major" "temurin-63-ea" "$(jolta home 2>/dev/null)"
+echo 64 > .java-version
+check "managed JDK without release file resolves via dir name" "temurin-64.0.1" "$(jolta home 2>/dev/null)"
+
+# nested tool invocation stays on the pinned JDK (volta #146/#492)
+cd "$work/d"
+check "nested tool invocation resolves via shims" "fake-javac 97.0.1" "$(java --fake-nested 2>&1)"
+
+# shim recursion guard (volta #630): bin/java pointing back at jolta
+mkdir -p "$JOLTA_HOME/jdks/temurin-71.0.1/bin"
+printf 'JAVA_VERSION="71.0.1"\n' > "$JOLTA_HOME/jdks/temurin-71.0.1/release"
+ln -s "$JOLTA_BIN" "$JOLTA_HOME/jdks/temurin-71.0.1/bin/java"
+mkdir -p "$work/j2" && cd "$work/j2" && echo 71 > .java-version
+( java -version >"$work/rec-out" 2>&1; echo $? > "$work/rec-rc" ) &
+recpid=$!; n=0
+while kill -0 "$recpid" 2>/dev/null && [ $n -lt 50 ]; do sleep 0.1; n=$((n+1)); done
+if kill -0 "$recpid" 2>/dev/null; then
+  kill -9 "$recpid" 2>/dev/null
+  bad "shim refuses to exec itself (no recursion)" "     hung in an exec loop"
+else
+  rc=$(cat "$work/rec-rc")
+  check_rc "shim refuses to exec itself (no recursion)" nonzero "$rc"
+  check "recursion error is actionable" "refusing to recurse" "$(cat "$work/rec-out")"
+fi
+rm -rf "$JOLTA_HOME/jdks/temurin-71.0.1"
+jolta reshim >/dev/null
+
+# reshim heals blocked shim paths (volta #1183): directory + dangling symlink
+rm -f "$JOLTA_HOME/shims/java";  mkdir "$JOLTA_HOME/shims/java"
+rm -f "$JOLTA_HOME/shims/javac"; ln -s /nonexistent-target "$JOLTA_HOME/shims/javac"
+jolta reshim >/dev/null
+[ -L "$JOLTA_HOME/shims/java" ] \
+  && ok "reshim replaces a directory squatting on a shim path" \
+  || bad "reshim replaces a directory squatting on a shim path" "     still a directory"
+check "healed shims work again" "fake-java 97.0.1" "$(cd "$work/d" && java 2>&1)"
+
+# uninstalling the active default leaves a clean, named error (volta #103)
+mk_jdk temurin-70.0.1 70.0.1 "Eclipse Adoptium"
+jolta reshim >/dev/null
+jolta default 70 >/dev/null 2>&1
+jolta uninstall temurin-70.0.1 >/dev/null 2>&1
+mkdir -p "$work/j4" && cd "$work/j4"
+jolta_rc java -version
+check_rc "shim fails cleanly after default's JDK uninstalled" nonzero "$rc"
+check "error blames the dangling default" "jolta default" "$out"
+jolta_rc jolta list
+check_rc "list survives a dangling default" 0 "$rc"
+jolta default 96 >/dev/null 2>&1
+
+# env output is eval-safe for hostile paths (volta #216, sdkman #1317)
+evil="$work/inj\$(touch pwned-env)'quote"
+mkdir -p "$evil/jdks"
+mk_jdk "$evil/jdks/temurin-69.0.1" 69.0.1 "Eclipse Adoptium"
+mkdir -p "$work/j5" && cd "$work/j5"
+echo 69 > .java-version
+envout=$(JOLTA_HOME="$evil" "$JOLTA_BIN" env 2>/dev/null)
+got=$(sh -c 'eval "$1" >/dev/null 2>&1; printf %s "${JAVA_HOME:-}"' _ "$envout")
+[ ! -e "$work/j5/pwned-env" ] && [ ! -e "$work/pwned-env" ] \
+  && ok "env eval never executes path contents" \
+  || bad "env eval never executes path contents" "     command substitution ran!"
+check_eq "env round-trips a hostile JAVA_HOME" "$evil/jdks/temurin-69.0.1" "$got"
+
+# exec must not eat tool args that look like jolta flags (volta #863)
+cd "$work/d"
+check "exec passes --fresh through to the tool" "arg=[--fresh]" "$(jolta exec java --fresh 2>&1)"
+
+# literal unexpanded ~ in JOLTA_HOME (volta #484)
+tildehome="$work/tilde-home"; mkdir -p "$tildehome" "$work/j6"
+(cd "$work/j6" && env HOME="$tildehome" JOLTA_HOME='~/jh' "$JOLTA_BIN" reshim >/dev/null 2>&1)
+[ -d "$tildehome/jh/shims" ] \
+  && ok "JOLTA_HOME=~/jh expands to HOME" \
+  || bad "JOLTA_HOME=~/jh expands to HOME" "     no shims under \$HOME/jh"
+[ ! -e "$work/j6/~" ] \
+  && ok "no literal ~ directory created in cwd" \
+  || bad "no literal ~ directory created in cwd" "     ./~ exists!"
+
+# archive with 644-mode binaries must still install runnable tools (volta #350)
+publish temurin 62 62.0.1
+chmod 644 "$work/stage-62.0.1/jdk-root/bin/java"
+tar -C "$work/stage-62.0.1" -czf "$mirror/temurin/62/$plat.tar.gz" jdk-root
+jolta_rc env JOLTA_DOWNLOAD_BASE="file://$mirror" jolta install 62
+check_rc "644-mode archive installs" 0 "$rc"
+mkdir -p "$work/j7" && cd "$work/j7" && echo 62 > .java-version
+check "binaries made executable at install" "fake-java 62.0.1 mirror" "$(jolta exec java 2>&1)"
+jolta uninstall temurin-62.0.1 >/dev/null 2>&1
+
+# fresh, never-created JOLTA_HOME bootstraps on any command (jenv #348 family)
+freshhome="$work/never-created-home"
+jolta_rc env JOLTA_HOME="$freshhome" "$JOLTA_BIN" reshim
+check_rc "reshim bootstraps a missing JOLTA_HOME" 0 "$rc"
+jolta_rc env JOLTA_HOME="$freshhome" "$JOLTA_BIN" default 96
+check_rc "default bootstraps a missing JOLTA_HOME" 0 "$rc"
+[ -f "$freshhome/default" ] \
+  && ok "default file written in fresh home" \
+  || bad "default file written in fresh home" "     missing"
+
+# hooks under set -e (sdkman #1229) and macOS /bin/bash 3.2 (sdkman #1518)
+out=$(bash --noprofile --norc -c '
+  set -e
+  export PATH="'"$JOLTA_HOME/shims:$bindir"':$PATH" JOLTA_HOME="'"$JOLTA_HOME"'"
+  eval "$(jolta hook bash)"
+  cd "'"$work"'/g4" && eval "$PROMPT_COMMAND"
+  cd "'"$work"'/d"  && eval "$PROMPT_COMMAND"
+  echo ERREXIT-OK' 2>&1)
+check "bash hook survives set -e (incl. unresolvable pin)" "ERREXIT-OK" "$out"
+if command -v zsh >/dev/null 2>&1; then
+  out=$(zsh -f -c '
+    set -e
+    export PATH="'"$JOLTA_HOME/shims:$bindir"':$PATH" JOLTA_HOME="'"$JOLTA_HOME"'"
+    eval "$(jolta hook zsh)"
+    cd "'"$work"'/g4" && _jolta_sync
+    cd "'"$work"'/d"  && _jolta_sync
+    echo ERREXIT-OK' 2>&1)
+  check "zsh hook survives set -e" "ERREXIT-OK" "$out"
+fi
+if [ -x /bin/bash ]; then
+  out=$(/bin/bash --noprofile --norc -c '
+    export PATH="'"$JOLTA_HOME/shims:$bindir"':$PATH" JOLTA_HOME="'"$JOLTA_HOME"'"
+    eval "$(jolta hook bash)"
+    cd "'"$work"'/d" && eval "$PROMPT_COMMAND"
+    echo B32-OK' 2>&1)
+  check "hook works under macOS /bin/bash 3.2" "B32-OK" "$out"
+  check_not "no bash-4isms in hook (bad substitution)" "bad substitution" "$out"
+fi
+
+# =================================================================
+section "K. mise-issue-derived resolver semantics"
+# =================================================================
+
+# bare-GA "21" release must not shadow point releases on a major pin (mise #1887)
+mk_jdk temurin-60     60     "Eclipse Adoptium"
+mk_jdk temurin-60.0.2 60.0.2 "Eclipse Adoptium"
+mkdir -p "$work/k" && cd "$work/k"
+echo 60 > .java-version
+check "major pin picks 60.0.2 over bare-GA 60" "temurin-60.0.2" "$(jolta home 2>/dev/null)"
+
+# legacy update numbers must order JDK 8-style builds (mise #839 family)
+mk_jdk temurin-1.59.0_10 1.59.0_10 "Eclipse Adoptium"
+mk_jdk temurin-1.59.0_20 1.59.0_20 "Eclipse Adoptium"
+echo 59 > .java-version
+check "legacy _update distinguishes builds (picks _20)" "1.59.0_20" "$(jolta home 2>/dev/null)"
+
+# version-tie: managed JDK must beat a same-version system JDK (mise #1553)
+mk_jdk temurin-58.0.1 58.0.1 "Eclipse Adoptium"
+mk_jdk "$work/sys58"  58.0.1 "Homebrew"
+echo 58 > .java-version
+check_eq "managed wins the tie against system at equal version" \
+  "$JOLTA_HOME/jdks/temurin-58.0.1" \
+  "$(JAVA_HOME_58_ARM64="$work/sys58" jolta home 2>/dev/null)"
+
+# EA/GA separation (mise #6907)
+mk_jdk temurin-57-ea  57-ea  "Eclipse Adoptium"
+mk_jdk temurin-57.0.1 57.0.1 "Eclipse Adoptium"
+echo 57 > .java-version
+check "GA pin prefers the GA build over EA" "temurin-57.0.1" "$(jolta home 2>/dev/null)"
+echo 57-ea > .java-version
+check "-ea pin selects the EA build" "temurin-57-ea" "$(jolta home 2>/dev/null)"
+
+# numeric exact equivalence: pin 56.0.0 vs installed "56" (mise #839/#2726)
+mk_jdk temurin-56 56 "Eclipse Adoptium"
+echo 56.0.0 > .java-version
+check "pin 56.0.0 matches installed bare 56" "temurin-56" "$(jolta home 2>/dev/null)"
+
+# Zulu's nested bundle wrapper: zulu-55.jdk/Contents/Home (mise #9337)
+mk_jdk -b "$JOLTA_HOME/jdks/zulu-55.0.1/zulu-55.jdk" 55.0.1 "Azul Systems, Inc."
+echo 55 > .java-version
+check "nested *.jdk/Contents/Home wrapper resolves" "zulu-55.jdk/Contents/Home" "$(jolta home 2>/dev/null)"
+
+# vendorless exact auto-install stays with the vendor already providing
+# that major (mise #2620/#9989: no silent vendor switch)
+publish corretto 96.0.9 96.0.9
+mkdir -p "$work/k2" && cd "$work/k2"
+echo 96.0.9 > .java-version
+out=$(env -u JOLTA_NO_AUTO_INSTALL JOLTA_DOWNLOAD_BASE="file://$mirror" java 2>&1); rc=$?
+check_rc "vendor-sticky auto-install succeeds" 0 "$rc"
+[ -d "$JOLTA_HOME/jdks/corretto-96.0.9" ] \
+  && ok "auto-install kept the installed vendor (corretto)" \
+  || bad "auto-install kept the installed vendor (corretto)" "     $(ls -d "$JOLTA_HOME"/jdks/*96.0.9* 2>/dev/null)"
+jolta uninstall corretto-96.0.9 >/dev/null 2>&1
 
 # =================================================================
 echo

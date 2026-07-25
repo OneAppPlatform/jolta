@@ -13,9 +13,16 @@ pub fn home_dir() -> PathBuf {
 }
 
 pub fn jolta_home() -> PathBuf {
-    env::var("JOLTA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home_dir().join(".jolta"))
+    match env::var("JOLTA_HOME") {
+        // A single-quoted export leaves "~" unexpanded; taking it literally
+        // would create a directory named "~" in the cwd (volta #484).
+        Ok(v) if v == "~" => home_dir(),
+        Ok(v) => match v.strip_prefix("~/") {
+            Some(rest) => home_dir().join(rest),
+            None => PathBuf::from(v),
+        },
+        Err(_) => home_dir().join(".jolta"),
+    }
 }
 
 pub fn shims_dir() -> PathBuf {

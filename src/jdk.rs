@@ -48,11 +48,12 @@ pub fn is_exact(version: &str) -> bool {
 
 /// Sortable key from up to four dotted components ("21.0.4+7", corretto's
 /// five-part "21.0.2.13.1" — where only the 4th distinguishes point builds).
+/// Legacy update numbers ("1.8.0_392", "8u392") count as components — they
+/// are the ONLY thing distinguishing JDK 8 builds, so splitting them away
+/// would make every 8 build compare equal and upgrades no-op (mise #839).
+/// Build metadata (+13) and prerelease tags (-ea) are insignificant.
 pub fn numkey(version: &str) -> u64 {
-    let v = version
-        .split(|c| c == '+' || c == '_' || c == '-')
-        .next()
-        .unwrap_or("");
+    let v = version.split(['+', '-']).next().unwrap_or("").replace(['u', '_'], ".");
     let mut parts = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0).min(999));
     let a = parts.next().unwrap_or(0);
     let b = parts.next().unwrap_or(0);
@@ -71,15 +72,33 @@ pub fn has_java(home: &Path) -> bool {
     tool_bin(home, "java").is_file()
 }
 
-/// Full JAVA_VERSION from a JDK home's release file.
+/// Full JAVA_VERSION from a JDK home's release file. Values are usually
+/// quoted, but not always (jenv #385) — tolerate both.
 pub fn jdk_version(home: &Path) -> Option<String> {
     let text = fs::read_to_string(home.join("release")).ok()?;
     for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("JAVA_VERSION=\"") {
-            return Some(rest.trim_end_matches('"').to_string());
+        if let Some(rest) = line.strip_prefix("JAVA_VERSION=") {
+            let v = rest.trim().trim_matches('"').to_string();
+            if !v.is_empty() {
+                return Some(v);
+            }
         }
     }
     None
+}
+
+/// Version guess from an install-dir name ("8.0.392-tem" -> "8.0.392",
+/// "java-1.8.0-openjdk-amd64" -> "1.8.0", "jdk1.8.0_392" -> "1.8.0_392").
+/// Fallback for JDKs that ship no release file — notably many JDK 8 builds.
+pub fn version_from_name(dir: &Path) -> Option<String> {
+    let name = dir.file_name()?.to_string_lossy().into_owned();
+    let start = name.find(|c: char| c.is_ascii_digit())?;
+    let v: String = name[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '_')
+        .collect();
+    let v = v.trim_end_matches(['.', '_']).to_string();
+    if v.is_empty() { None } else { Some(v) }
 }
 
 /// Which distro a JDK home is, from its release IMPLEMENTOR or its path.
@@ -110,6 +129,25 @@ pub fn vendor_of(home: &Path) -> Option<&'static str> {
     if imp.contains("oracle") {
         return Some("oracle");
     }
+    // sdkman install dirs encode the vendor as a suffix ("8.0.392-tem");
+    // without this, .sdkmanrc pins like "java=8.0.392-tem" can see the JDK
+    // sdkman installed but never vendor-match it.
+    if let Some(name) = home.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()) {
+        if let Some((_, suffix)) = name.rsplit_once('-') {
+            let v = match suffix {
+                "tem" => "temurin",
+                "amzn" => "corretto",
+                "zulu" => "zulu",
+                "graal" | "graalce" => "graalvm",
+                "oracle" => "oracle",
+                "open" => "openjdk",
+                _ => "",
+            };
+            if !v.is_empty() {
+                return KNOWN_VENDORS.iter().find(|k| **k == v).copied();
+            }
+        }
+    }
     let path = home.to_string_lossy().to_ascii_lowercase();
     for v in ["corretto", "temurin", "zulu", "oracle"] {
         if path.contains(v) {
@@ -125,14 +163,25 @@ pub fn vendor_of(home: &Path) -> Option<&'static str> {
     None
 }
 
-/// The usable home inside an install dir (handles macOS Contents/Home bundles).
+/// The usable home inside an install dir (handles macOS Contents/Home
+/// bundles, including Zulu's nested "zulu-17.jdk/Contents/Home" wrapper —
+/// vendors reshuffle these layouts across releases, mise #9337).
 pub fn managed_home(dir: &Path) -> PathBuf {
     let bundled = dir.join("Contents/Home");
     if bundled.is_dir() {
-        bundled
-    } else {
-        dir.to_path_buf()
+        return bundled;
     }
+    if !has_java(dir) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let nested = e.path().join("Contents/Home");
+                if nested.is_dir() && has_java(&nested) {
+                    return nested;
+                }
+            }
+        }
+    }
+    dir.to_path_buf()
 }
 
 /// jolta-managed JDKs as (fullversion, home) pairs.
@@ -146,7 +195,11 @@ pub fn list_managed() -> Vec<(String, PathBuf)> {
             continue;
         }
         let home = managed_home(&dir);
-        if let Some(v) = jdk_version(&home) {
+        // Hand-placed JDKs may lack a release file (common for JDK 8):
+        // fall back to the "vendor-version" dir name.
+        let v = jdk_version(&home)
+            .or_else(|| if has_java(&home) { version_from_name(&dir) } else { None });
+        if let Some(v) = v {
             out.push((v, home));
         }
     }
@@ -194,8 +247,14 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
             if !dir.is_dir() || dir.file_name().is_some_and(|n| n == "current") {
                 continue;
             }
-            if let Some(v) = jdk_version(&dir) {
-                out.push((v, dir));
+            // macOS bundle layouts (dir/Contents/Home) appear in these scan
+            // dirs too, not just managed installs (sdkman #1490 family)
+            let home = managed_home(&dir);
+            // No release file (many JDK 8 builds): derive from the dir name
+            let v = jdk_version(&home)
+                .or_else(|| if has_java(&home) { version_from_name(&dir) } else { None });
+            if let Some(v) = v {
+                out.push((v, home));
             }
         }
     }
@@ -204,7 +263,9 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
     for (key, value) in std::env::vars() {
         if key.starts_with("JAVA_HOME_") {
             let dir = PathBuf::from(value.trim_end_matches(['/', '\\']));
-            if let Some(v) = jdk_version(&dir) {
+            let v = jdk_version(&dir)
+                .or_else(|| if has_java(&dir) { version_from_name(&dir) } else { None });
+            if let Some(v) = v {
                 out.push((v, dir));
             }
         }

@@ -39,6 +39,17 @@ fn run_shim(tool: &str, args: Vec<OsString>) -> ! {
             r.source
         ));
     }
+    // Recursion guard (volta #630): a mis-registered JDK whose bin/java is a
+    // symlink back to jolta would exec-loop forever.
+    if let (Ok(me), Ok(target)) = (env::current_exe().and_then(|p| p.canonicalize()), bin.canonicalize()) {
+        if target == me {
+            die(&format!(
+                "'{tool}' in {} resolves back to jolta itself — refusing to recurse\n  \
+                 (a shim or the jolta binary is inside a registered JDK's bin; run 'jolta reshim')",
+                r.home.display()
+            ));
+        }
+    }
     let mut cmd = Command::new(&bin);
     cmd.args(&args).env("JAVA_HOME", &r.home);
     platform::exec_replace(cmd);
@@ -68,9 +79,14 @@ fn main() {
     if env::var("JOLTA_FRESH").is_ok() {
         install::set_fresh();
     }
-    if let Some(i) = rest.iter().position(|a| a == "--fresh") {
-        rest.remove(i);
-        install::set_fresh();
+    // --fresh belongs to the remote-cache commands only; stripping it from
+    // exec's passthrough args would eat an argument meant for the child tool
+    // (volta #863 class).
+    if matches!(cmd.as_str(), "catalog" | "search" | "available" | "ls-remote" | "update" | "outdated" | "upgrade" | "install") {
+        if let Some(i) = rest.iter().position(|a| a == "--fresh") {
+            rest.remove(i);
+            install::set_fresh();
+        }
     }
     match cmd.as_str() {
         "setup" => cmd_setup(),

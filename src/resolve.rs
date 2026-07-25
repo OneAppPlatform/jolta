@@ -25,7 +25,12 @@ pub fn best_match(
     major: u32,
     version: &str,
 ) -> Option<PathBuf> {
-    let mut best: Option<(u64, &PathBuf)> = None;
+    // Pins ending in -ea accept only EA builds; GA pins prefer GA and fall
+    // back to EA only when nothing else provides the major (mise #6907:
+    // never satisfy an EA request silently with a GA build or vice versa).
+    let want_ea = version.contains("-ea");
+    let mut best: Option<(u64, &PathBuf)> = None; // GA candidates
+    let mut best_ea: Option<(u64, &PathBuf)> = None;
     let mut exact: Option<&PathBuf> = None;
     for (v, home) in candidates {
         if major_of(v) != Some(major) {
@@ -36,24 +41,30 @@ pub fn best_match(
                 continue;
             }
         }
-        // Exact match tolerates build metadata: a pin of "21.0.2+13" (as
-        // vendors publish it) must match an installed "21.0.2" and vice versa.
-        fn base(s: &str) -> &str {
-            s.split('+').next().unwrap_or(s)
+        let is_ea = v.contains("-ea");
+        if want_ea && !is_ea {
+            continue;
         }
-        if base(v) == base(version) {
+        // Exact matches compare numerically, so "21.0.2+13" == "21.0.2" and
+        // "21.0.0" == "21" (vendors publish both notations, mise #839/#2726).
+        if exact.is_none() && numkey(v) == numkey(version) {
             exact = Some(home);
         }
         let k = numkey(v);
-        if best.map_or(true, |(bk, _)| k >= bk) {
-            best = Some((k, home));
+        let slot = if is_ea { &mut best_ea } else { &mut best };
+        // strict >: ties keep the EARLIER candidate — managed JDKs come first
+        // in `candidates`, so a managed JDK beats a same-version system one
+        if slot.map_or(true, |(bk, _)| k > bk) {
+            *slot = Some((k, home));
         }
     }
     // An exact spec means exact: never satisfy "21.0.2" with some other 21.x
     if is_exact(version) {
         return exact.cloned();
     }
-    exact.or(best.map(|(_, h)| h)).cloned()
+    // A major pin picks the highest build; the bare-GA "21" release that
+    // happens to string-match the pin must not shadow 21.0.x (mise #1887).
+    best.or(best_ea).map(|(_, h)| h.clone())
 }
 
 fn cache_path(spec: &str) -> PathBuf {
@@ -217,8 +228,18 @@ fn try_auto_install(spec: &str) -> bool {
         return false;
     }
     let (vendor, version) = parse_spec(spec);
-    let vendor = vendor.unwrap_or("temurin");
     let Some(major) = major_of(&version) else { return false };
+    // Vendorless spec: stay with a vendor that already provides this major
+    // (a corretto shop pinning "21.0.9" should not silently gain a temurin).
+    let vendor = vendor
+        .or_else(|| {
+            list_all()
+                .iter()
+                .filter(|(v, _)| major_of(v) == Some(major))
+                .find_map(|(_, h)| vendor_of(h))
+                .filter(|v| INSTALLABLE_VENDORS.contains(v))
+        })
+        .unwrap_or("temurin");
     if !INSTALLABLE_VENDORS.contains(&vendor) {
         eprintln!(
             "{} cannot auto-install '{vendor}' builds (downloadable distros: {})",
