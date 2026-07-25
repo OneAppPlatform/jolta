@@ -11,7 +11,7 @@ use crate::install::{
     prune_superseded, release_universe, vendor_versions,
 };
 use crate::jdk::{
-    jdk_version, list_all, list_managed, list_system, major_of, numkey, parse_spec,
+    is_exact, jdk_version, list_all, list_managed, list_system, major_of, numkey, parse_spec,
     system_default, tool_bin, vendor_of, INSTALLABLE_VENDORS, KNOWN_VENDORS,
 };
 use crate::platform;
@@ -31,7 +31,7 @@ pub fn usage() {
   install <spec>         Download a JDK (e.g. 21, corretto@21, graalvm@25)
   update, outdated       Check jolta-managed JDKs for newer point releases
   upgrade [spec]         Upgrade jolta-managed JDKs (all, or one: 21, corretto@21)
-  uninstall <name>       Remove a jolta-managed JDK (see 'jolta list' for names)
+  uninstall <spec>       Remove a jolta-managed JDK (25, temurin@25, or a full name)
   list, ls               List installed JDKs and where they come from
   catalog [x]            The JDK catalog: latest per distro, per-major, or per-distro
                          (@v filters: temurin@21 all 21.x, temurin@21.0 all 21.0.x)
@@ -791,10 +791,74 @@ pub fn cmd_upgrade(spec: Option<&str>) {
     }
 }
 
+/// Shortest spec that uniquely picks `pick` out of `all` (dir names like
+/// "temurin-25.0.3"): bare version, then vendor@major, then vendor@version.
+fn minimal_spec(pick: &str, all: &[String]) -> String {
+    let (vendor, full) = pick.split_once('-').unwrap_or(("", pick));
+    let full_dup = all
+        .iter()
+        .filter(|n| n.split_once('-').is_some_and(|(_, f)| f == full))
+        .count()
+        > 1;
+    if !full_dup {
+        return full.to_string();
+    }
+    let major = major_of(full);
+    let vm_dup = all
+        .iter()
+        .filter(|n| n.split_once('-').is_some_and(|(v, f)| v == vendor && major_of(f) == major))
+        .count()
+        > 1;
+    match (vm_dup, major) {
+        (false, Some(m)) => format!("{vendor}@{m}"),
+        _ => format!("{vendor}@{full}"),
+    }
+}
+
 pub fn cmd_uninstall(name: &str) {
-    let dest = jolta_home().join("jdks").join(name);
+    let jdks = jolta_home().join("jdks");
+    // A literal directory name (temurin-25.0.3) always works; otherwise
+    // accept the same spec forms every other command takes (25, 25.0.3,
+    // temurin@25) and match them against the managed installs.
+    let mut dest = jdks.join(name);
     if !dest.is_dir() {
-        die(&format!("'{name}' is not a jolta-managed JDK (see 'jolta list')"));
+        let (vendor, version) = parse_spec(name);
+        let major = major_of(&version);
+        let mut all_names: Vec<String> = Vec::new();
+        let mut matches: Vec<String> = Vec::new();
+        if let Ok(entries) = fs::read_dir(&jdks) {
+            for entry in entries.flatten() {
+                let dir_name = entry.file_name().to_string_lossy().to_string();
+                let Some((v, full)) = dir_name.split_once('-') else { continue };
+                all_names.push(dir_name.clone());
+                if vendor.is_some_and(|want| v != want) {
+                    continue;
+                }
+                let hit = if is_exact(&version) {
+                    full == version
+                } else {
+                    major.is_some() && major_of(full) == major
+                };
+                if hit {
+                    matches.push(dir_name);
+                }
+            }
+        }
+        matches.sort();
+        dest = match matches.len() {
+            0 => die(&format!("'{name}' is not a jolta-managed JDK (see 'jolta list')")),
+            1 => jdks.join(&matches[0]),
+            _ => {
+                let mut lines = String::new();
+                for m in &matches {
+                    // minimality is judged against everything installed, not
+                    // just the matches — a suggestion must never itself be
+                    // ambiguous when pasted back
+                    lines.push_str(&format!("\n  jolta uninstall {}", minimal_spec(m, &all_names)));
+                }
+                die(&format!("'{name}' matches more than one installed JDK — be more specific:{lines}"));
+            }
+        };
     }
     fs::remove_dir_all(&dest).unwrap_or_else(|e| die(&format!("cannot remove {}: {e}", dest.display())));
     clear_cache();

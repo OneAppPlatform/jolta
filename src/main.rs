@@ -81,10 +81,7 @@ fn main() {
         },
         "uninstall" => match rest.first() {
             Some(s) => cmd_uninstall(s),
-            None => die(&format!(
-                "usage: jolta uninstall <name>  (a directory name from {}/jdks)",
-                paths::jolta_home().display()
-            )),
+            None => die("usage: jolta uninstall <spec>  (e.g. 25, temurin@25, or a full name like temurin-25.0.3)"),
         },
         "catalog" | "search" | "available" | "ls-remote" => cmd_catalog(rest.first().map(String::as_str)),
         "update" | "outdated" => cmd_update(),
