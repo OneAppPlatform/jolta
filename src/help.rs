@@ -34,10 +34,9 @@ pub fn usage() {
     row("implode", "Uninstall jolta completely (~/.jolta + shell profile lines)");
     row("version", "Print jolta's version");
     println!(
-        "\nA <spec> is a version with an optional distro {}:",
-        dim("(distro@version or distro-version)")
+        "\nA <spec> is a version with an optional distro: {}",
+        cyan("21  21.0.4  corretto@21  temurin@8")
     );
-    println!("  21   21.0.4   1.8   corretto@21   graalvm-25   temurin@8");
     println!(
         "Downloadable distros: {} (default {}).",
         cyan(&INSTALLABLE_VENDORS.join(", ")),
