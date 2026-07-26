@@ -239,6 +239,17 @@ pub fn cmd_setup() {
         return;
     }
     #[allow(unreachable_code)]
+    {
+        ensure_profile();
+        println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
+    }
+}
+
+/// Append the PATH and JAVA_HOME-hook blocks to the shell profile when they
+/// are missing. Returns true if anything was added. Shared by setup and
+/// `doctor --fix`; Windows PATH stays manual (see cmd_setup).
+#[cfg(unix)]
+fn ensure_profile() -> bool {
     let profile = profile_file();
     let existing = fs::read_to_string(&profile).unwrap_or_default();
     let mut additions = String::new();
@@ -259,16 +270,17 @@ pub fn cmd_setup() {
         ));
         println!("{} added JAVA_HOME hook to {}", ok_mark(), profile.display());
     }
-    if !additions.is_empty() {
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&profile)
-            .unwrap_or_else(|e| die(&format!("cannot open {}: {e}", profile.display())));
-        f.write_all(additions.as_bytes())
-            .unwrap_or_else(|e| die(&format!("cannot write {}: {e}", profile.display())));
+    if additions.is_empty() {
+        return false;
     }
-    println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&profile)
+        .unwrap_or_else(|e| die(&format!("cannot open {}: {e}", profile.display())));
+    f.write_all(additions.as_bytes())
+        .unwrap_or_else(|e| die(&format!("cannot write {}: {e}", profile.display())));
+    true
 }
 
 pub fn cmd_pin(rest: &[String]) {
@@ -1276,8 +1288,14 @@ fn binary_arch(path: &Path) -> Option<&'static str> {
     }
 }
 
-pub fn cmd_doctor() -> i32 {
+pub fn cmd_doctor(fix: bool) -> i32 {
     let mut rc = 0;
+    // --fix repairs what is safe to repair mechanically: broken shims
+    // (reshim) and missing profile blocks (the same appends setup does).
+    // Everything else — dangling brew links, stale JAVA_HOME, mavenrc
+    // overrides — needs the user, and only gets diagnosed.
+    let mut needs_reshim = false;
+    let mut needs_profile = false;
     let home = jolta_home();
     println!("{}", bold("jolta doctor"));
     println!("  jolta home:    {}", home.display());
@@ -1320,11 +1338,13 @@ pub fn cmd_doctor() -> i32 {
                     bad_mark()
                 );
                 rc = 1;
+                needs_reshim = true;
             }
         }
     } else {
         println!("  shims:         {} MISSING — run \"jolta setup\"", bad_mark());
         rc = 1;
+        needs_reshim = true;
     }
 
     let on_path = env::var_os("PATH")
@@ -1335,6 +1355,7 @@ pub fn cmd_doctor() -> i32 {
     } else {
         println!("  PATH:          {} shims dir NOT on PATH — run \"jolta setup\" and open a new shell", bad_mark());
         rc = 1;
+        needs_profile = true;
     }
 
     match which("java") {
@@ -1376,6 +1397,7 @@ pub fn cmd_doctor() -> i32 {
         Err(_) => {
             println!("  JAVA_HOME:     {} not set — shims still work, but mvn/gradle prefer JAVA_HOME;", warn_mark());
             println!("                 run \"jolta setup\" to install the cd hook that keeps it in sync");
+            needs_profile = true;
         }
     }
 
@@ -1434,6 +1456,31 @@ pub fn cmd_doctor() -> i32 {
     }
     if let Some(v) = crate::jdk::preferred_vendor() {
         println!("  vendor:        {v} preferred (vendorless specs pick it first)");
+    }
+
+    if fix {
+        let mut fixed = false;
+        if needs_reshim {
+            println!();
+            cmd_reshim();
+            fixed = true;
+        }
+        #[cfg(unix)]
+        if needs_profile {
+            println!();
+            fixed |= ensure_profile();
+        }
+        #[cfg(windows)]
+        let _ = needs_profile; // Windows PATH is set through the system UI
+        if fixed {
+            println!(
+                "\n{} fixes applied — open a new shell, then re-run {} to confirm",
+                ok_mark(),
+                bold("jolta doctor")
+            );
+        } else if rc != 0 {
+            println!("\n{} nothing here that --fix can repair automatically", warn_mark());
+        }
     }
     rc
 }

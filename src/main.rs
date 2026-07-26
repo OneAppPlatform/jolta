@@ -137,7 +137,7 @@ fn main() {
         "prune" => cmd_prune(&rest),
         "vendor" => cmd_vendor(&rest),
         "reshim" => cmd_reshim(),
-        "doctor" => exit(cmd_doctor()),
+        "doctor" => exit(cmd_doctor(rest.iter().any(|a| a == "--fix"))),
         "implode" => cmd_implode(&rest),
         "version" | "-v" | "--version" => println!("jolta {VERSION}"),
         "help" | "-h" | "--help" => match rest.first() {
