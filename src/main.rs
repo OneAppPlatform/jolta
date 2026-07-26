@@ -134,6 +134,7 @@ fn main() {
             cmd_hook(&shell);
         }
         "mirror" => install::cmd_mirror(&rest),
+        "toolchains" => cmd_toolchains(&rest),
         "prune" => cmd_prune(&rest),
         "vendor" => cmd_vendor(&rest),
         "reshim" => cmd_reshim(),
