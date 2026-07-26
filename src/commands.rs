@@ -231,14 +231,23 @@ pub fn cmd_setup() {
 
     #[cfg(windows)]
     {
-        ensure_windows_env();
-        println!("{} setup complete {}", ok_mark(), dim("(open a new terminal to activate)"));
+        // a new terminal is only needed when the environment actually changed
+        if ensure_windows_env() {
+            println!("{} setup complete {}", ok_mark(), dim("(open a new terminal to activate)"));
+        } else {
+            println!("{} setup complete {}", ok_mark(), dim("(already active)"));
+        }
         return;
     }
     #[cfg(unix)]
     {
-        ensure_profile();
-        println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
+        // a new shell is only needed when profile blocks were actually added;
+        // on a re-run everything is live already (the hook syncs via the stamp)
+        if ensure_profile() {
+            println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
+        } else {
+            println!("{} setup complete {}", ok_mark(), dim("(already active)"));
+        }
     }
 }
 
@@ -1626,6 +1635,8 @@ pub fn cmd_doctor(fix: bool) -> i32 {
 
     if fix {
         let mut fixed = false;
+        // profile/PATH edits need a fresh shell to land; a reshim is live at once
+        let mut env_fixed = false;
         if needs_reshim {
             println!();
             cmd_reshim();
@@ -1634,19 +1645,23 @@ pub fn cmd_doctor(fix: bool) -> i32 {
         #[cfg(unix)]
         if needs_profile {
             println!();
-            fixed |= ensure_profile();
+            env_fixed = ensure_profile();
+            fixed |= env_fixed;
         }
         #[cfg(windows)]
         if needs_profile {
             println!();
-            fixed |= ensure_windows_env();
+            env_fixed = ensure_windows_env();
+            fixed |= env_fixed;
         }
-        if fixed {
+        if env_fixed {
             println!(
                 "\n{} fixes applied — open a new shell, then re-run {} to confirm",
                 ok_mark(),
                 bold("jolta doctor")
             );
+        } else if fixed {
+            println!("\n{} fixes applied — re-run {} to confirm", ok_mark(), bold("jolta doctor"));
         } else if rc != 0 {
             println!("\n{} nothing here that --fix can repair automatically", warn_mark());
         }
