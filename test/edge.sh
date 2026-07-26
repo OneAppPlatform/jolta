@@ -430,9 +430,10 @@ jolta_rc jolta pin;         check_rc "pin with no args fails with usage" nonzero
 jolta_rc jolta install;     check_rc "install with no args fails with usage" nonzero "$rc"
 jolta_rc jolta frobnicate;  check_rc "unknown command fails" nonzero "$rc"
 check "unknown command names itself" "frobnicate" "$out"
-jolta_rc jolta hook fish
+jolta_rc jolta hook tcsh
 check_rc "hook for unsupported shell fails" nonzero "$rc"
 check "hook error lists supported shells" "zsh" "$out"
+check "fish hook prints fish syntax" "set -gx JAVA_HOME" "$(jolta hook fish 2>/dev/null)"
 
 check "version prints" "jolta " "$(jolta version 2>&1)"
 
