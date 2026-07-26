@@ -54,6 +54,10 @@ pub fn banner() {
     for (line, shade) in ART.iter().zip(SHADES) {
         println!("{}", paint(&format!("38;5;{shade}"), line, false));
     }
+    // version straight from Cargo.toml at compile time — nothing to keep in sync
+    let v = concat!("v", env!("CARGO_PKG_VERSION"));
+    // pad BEFORE painting: ANSI escapes would break the right-alignment
+    println!("{}", dim(&format!("{v:>50}")));
     println!();
 }
 
