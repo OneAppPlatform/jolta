@@ -7,6 +7,7 @@
 //! on main; test/smoke.sh is the conformance suite.
 
 mod commands;
+mod complete;
 mod help;
 mod platform;
 mod download;
@@ -135,6 +136,10 @@ fn main() {
         }
         "mirror" => install::cmd_mirror(&rest),
         "toolchains" => cmd_toolchains(&rest),
+        "completions" => {
+            let shell = rest.first().cloned().unwrap_or_else(shell_name);
+            complete::cmd_completions(&shell);
+        }
         "prune" => cmd_prune(&rest),
         "vendor" => cmd_vendor(&rest),
         "reshim" => cmd_reshim(),

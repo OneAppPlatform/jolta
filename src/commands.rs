@@ -43,7 +43,7 @@ fn expand_spec(spec: &str) -> String {
 /// is installed — so the very first plain `java` reaches jolta and can
 /// trigger the bootstrap auto-install instead of falling through to the
 /// macOS /usr/bin/java stub ("Unable to locate a Java Runtime").
-const BASELINE_TOOLS: &[&str] = &[
+pub const BASELINE_TOOLS: &[&str] = &[
     "jar", "jarsigner", "java", "javac", "javadoc", "javap", "jcmd", "jconsole", "jdb",
     "jdeprscan", "jdeps", "jfr", "jhsdb", "jimage", "jinfo", "jlink", "jmap", "jmod",
     "jnativescan", "jpackage", "jps", "jrunscript", "jshell", "jstack", "jstat", "jstatd",

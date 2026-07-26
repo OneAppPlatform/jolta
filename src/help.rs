@@ -50,16 +50,17 @@ pub fn usage() {
 /// One `jolta help <command>` page. `{default}` and `{distros}` in any text
 /// field are filled in at render time so the pages never drift from the
 /// actual configuration.
-struct HelpPage {
-    name: &'static str,
-    summary: &'static str,
+pub struct HelpPage {
+    pub name: &'static str,
+    pub summary: &'static str,
     usage: &'static [&'static str],
     aliases: &'static [&'static str],
     about: &'static [&'static str],
     examples: &'static [(&'static str, &'static str)],
 }
 
-const PAGES: &[HelpPage] = &[
+/// Also the source of truth for completion scripts (src/complete.rs).
+pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "setup",
         summary: "install shims and wire up your shell",
