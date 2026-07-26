@@ -369,7 +369,67 @@ fn stale_java_home_hint(resolved: Option<&Path>) {
     }
 }
 
-pub fn cmd_list() {
+/// Minimal JSON string escaping — paths can carry quotes and backslashes
+/// (Windows), and a hand-rolled emitter keeps the crate dependency-free.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn list_json() {
+    let pin = read_pin();
+    let current = match &pin.spec {
+        Some(spec) => resolve(spec),
+        None => system_default(),
+    };
+    let managed = list_managed();
+    let mut system = list_system();
+    system.sort();
+    system.dedup();
+    let mut items: Vec<String> = Vec::new();
+    for (is_managed, (v, h)) in managed
+        .iter()
+        .map(|x| (true, x))
+        .chain(system.iter().map(|x| (false, x)))
+    {
+        let major = major_of(v).map_or("null".to_string(), |m| m.to_string());
+        let vendor = vendor_of(h).map_or("null".to_string(), json_str);
+        let active = Some(h) == current.as_ref();
+        items.push(format!(
+            "    {{\"version\": {}, \"major\": {major}, \"vendor\": {vendor}, \"home\": {}, \"managed\": {is_managed}, \"active\": {active}}}",
+            json_str(v),
+            json_str(&h.display().to_string())
+        ));
+    }
+    let pin_json = match &pin.spec {
+        Some(s) => format!("{{\"spec\": {}, \"source\": {}}}", json_str(s), json_str(&pin.source)),
+        None => "null".to_string(),
+    };
+    let jdks = if items.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[\n{}\n  ]", items.join(",\n"))
+    };
+    println!("{{\n  \"pin\": {pin_json},\n  \"jdks\": {jdks}\n}}");
+}
+
+pub fn cmd_list(rest: &[String]) {
+    if rest.iter().any(|a| a == "--json") {
+        return list_json();
+    }
     let pin = read_pin();
     let current = match &pin.spec {
         Some(spec) => resolve(spec),
@@ -437,8 +497,18 @@ pub fn cmd_jdks() {
     }
 }
 
-pub fn cmd_current() {
+pub fn cmd_current(rest: &[String]) {
     let r = resolve_current(false);
+    if rest.iter().any(|a| a == "--json") {
+        println!(
+            "{{\"version\": {}, \"vendor\": {}, \"home\": {}, \"source\": {}}}",
+            jdk_version(&r.home).as_deref().map_or("null".to_string(), json_str),
+            vendor_of(&r.home).map_or("null".to_string(), json_str),
+            json_str(&r.home.display().to_string()),
+            json_str(&r.source)
+        );
+        return;
+    }
     let v = jdk_version(&r.home).unwrap_or_else(|| "unknown".into());
     let vendor = vendor_of(&r.home).map(|s| format!(" ({s})")).unwrap_or_default();
     println!("{}{} {}", bold(&v), cyan(&vendor), dim(&format!("(from {})", r.source)));

@@ -117,9 +117,9 @@ fn main() {
         "catalog" | "search" | "available" | "ls-remote" => cmd_catalog(rest.first().map(String::as_str)),
         "update" | "outdated" => cmd_update(),
         "upgrade" => cmd_upgrade(rest.first().map(String::as_str)),
-        "list" | "ls" => cmd_list(),
+        "list" | "ls" => cmd_list(&rest),
         "jdks" => cmd_jdks(),
-        "current" => cmd_current(),
+        "current" => cmd_current(&rest),
         "which" => cmd_which(rest.first().map(String::as_str).unwrap_or("java")),
         "exec" => {
             if rest.is_empty() {
