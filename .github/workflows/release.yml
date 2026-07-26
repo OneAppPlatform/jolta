@@ -61,3 +61,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: gh release upload "$GITHUB_REF_NAME" jolta-${{ matrix.target }}.* --clobber
+
+  # Keep the winget manifest (OneAppPlatform.Jolta in microsoft/winget-pkgs)
+  # current. Runs only when a WINGET_TOKEN secret exists (classic PAT with
+  # public_repo scope); without it the job logs a skip and stays green. The
+  # very first submission must be made once by hand with `wingetcreate new`
+  # (portable zip package) — after that this job keeps every release current.
+  winget:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Submit manifest update
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        shell: pwsh
+        run: |
+          if (-not $env:WINGET_TOKEN) { Write-Host "WINGET_TOKEN not set - skipping winget submission"; exit 0 }
+          $v = "$env:GITHUB_REF_NAME".TrimStart("v")
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          .\wingetcreate.exe update OneAppPlatform.Jolta --version $v `
+            --urls "https://github.com/OneAppPlatform/jolta/releases/download/v$v/jolta-x86_64-pc-windows-msvc.zip" `
+            --submit --token $env:WINGET_TOKEN

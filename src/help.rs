@@ -594,6 +594,19 @@ mod tests {
         }
     }
 
+    /// The docs' JSON-LD softwareVersion must move with Cargo.toml — CI is
+    /// the release gate, so a version bump that forgets the docs fails here.
+    #[test]
+    fn docs_version_matches_cargo() {
+        let want = format!("\"softwareVersion\": \"{}\"", env!("CARGO_PKG_VERSION"));
+        for (name, html) in [
+            ("docs/index.html", include_str!("../docs/index.html")),
+            ("docs/manual.html", include_str!("../docs/manual.html")),
+        ] {
+            assert!(html.contains(&want), "{name} softwareVersion != {}", env!("CARGO_PKG_VERSION"));
+        }
+    }
+
     #[test]
     fn page_names_are_unique() {
         let mut names: Vec<&str> = PAGES.iter().map(|p| p.name).collect();
