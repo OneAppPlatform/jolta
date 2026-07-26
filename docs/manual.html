@@ -383,7 +383,11 @@ jolta toolchains --write    # manage ~/.m2/toolchains.xml directly</code></pre>
 Re-run it after installing or removing JDKs. For Gradle, the matching
 <code>org.gradle.java.installations.paths</code> line for
 <code>~/.gradle/gradle.properties</code> is printed alongside (on stderr, so
-redirecting the XML stays clean).</p>
+redirecting the XML stays clean), together with
+<code>org.gradle.java.installations.auto-download=false</code> — otherwise a
+project using a toolchain resolver (the common foojay convention plugin)
+downloads its own JDK whenever nothing matches, and jolta stops being the
+source of truth.</p>
 
 <h3 id="cmd-reshim"><code>jolta reshim</code></h3>
 <p class="sig">Regenerate the shim set.</p>

@@ -429,9 +429,10 @@ pub const PAGES: &[HelpPage] = &[
              ~/.m2/toolchains.xml directly — it refuses to overwrite a file it \
              didn't generate, so a hand-written toolchains.xml is never lost. \
              Re-run it after installing or removing JDKs.",
-            "For Gradle, the matching \
-             org.gradle.java.installations.paths line for \
-             ~/.gradle/gradle.properties is printed alongside.",
+            "For Gradle, the matching org.gradle.java.installations.paths line \
+             for ~/.gradle/gradle.properties is printed alongside, plus \
+             auto-download=false so Gradle's resolver plugins stop fetching \
+             their own JDKs.",
         ],
         examples: &[
             ("jolta toolchains", "print, e.g. to merge by hand"),

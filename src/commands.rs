@@ -1409,11 +1409,14 @@ pub fn cmd_toolchains(rest: &[String]) {
     } else {
         print!("{xml}");
     }
-    // Gradle reads no toolchains.xml; point its detection at the same JDKs
+    // Gradle reads no toolchains.xml; point its detection at the same JDKs.
+    // auto-download=false stops resolver plugins (foojay) fetching their own
+    // JDK when nothing matches — jolta stays the sole source.
     eprintln!(
-        "{}\n{}",
-        paint("2", "gradle: add this to ~/.gradle/gradle.properties to expose the same JDKs:", true),
-        paint("2", &format!("  org.gradle.java.installations.paths={gradle_paths}"), true)
+        "{}\n{}\n{}",
+        paint("2", "gradle: add these to ~/.gradle/gradle.properties to expose the same JDKs (and only these):", true),
+        paint("2", &format!("  org.gradle.java.installations.paths={gradle_paths}"), true),
+        paint("2", "  org.gradle.java.installations.auto-download=false", true)
     );
 }
 
