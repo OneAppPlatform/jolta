@@ -102,6 +102,12 @@ that could silently beat it. On a machine with no JDK at all, the first
 `java` run installs the latest LTS (Temurin) and sets it as your default —
 disable with `JOLTA_NO_AUTO_INSTALL=1`.
 
+The keywords **`lts`** and **`latest`** expand to the current LTS / feature major
+at pin time (`jolta pin lts` writes `21`-style concrete majors, so the pin never
+floats). **`jolta pin 21 --resolved`** goes the other way: it writes the exact
+version the spec lands on (`21.0.4`), so CI and teammates can't drift onto a
+different point release.
+
 A major pin (`21`) matches the highest installed build of that major, any distro
 (or the pinned distro). An **exact pin** (`21.0.2`, `corretto@21.0.2`) means exact:
 it never silently accepts a different build, and auto-install fetches precisely
@@ -214,12 +220,14 @@ jolta install corretto@21  # or another distro
 
 ## Commands
 
+Every command has a detailed page with examples: **`jolta help <command>`**.
+
 | Command | What it does |
 |---|---|
 | `jolta setup` | Install shims + shell profile setup |
-| `jolta pin <v>` | Write `.java-version` in the current directory |
+| `jolta pin <v> [--resolved]` | Write `.java-version` here (`--resolved` pins the exact version) |
 | `jolta default <v>` | Set the global fallback version |
-| `jolta install <spec>` | Download a JDK (`21`, `21.0.2`, `corretto@21`, `zulu@21.0.4`) |
+| `jolta install <spec>` | Download a JDK (`21`, `21.0.2`, `corretto@21`, `lts`, `latest`) |
 | `jolta catalog [x]` | The JDK catalog: latest per distro/major, `@v` prefix filters (aliases: `search`, `available`) |
 | `jolta update` | Check jolta-managed JDKs for newer point releases |
 | `jolta upgrade [spec]` | Upgrade jolta-managed JDKs, pruning old builds |
@@ -227,15 +235,18 @@ jolta install corretto@21  # or another distro
 | `jolta uninstall <name>` | Remove a jolta-managed JDK |
 | `jolta prune [spec] [-n]` | Remove superseded builds + stale non-LTS majors; pins protect |
 | `jolta vendor [name]` | Show/set the preferred distro for vendorless specs |
-| `jolta list` | List visible JDKs, star the active one |
-| `jolta current` | Show the version resolved here, and why |
+| `jolta list [--json]` | List visible JDKs, star the active one |
+| `jolta current [--json]` | Show the version resolved here, and why |
 | `jolta which [tool]` | Full path the shim would exec |
 | `jolta exec <cmd>` | Run any command with `JAVA_HOME`/`PATH` set for this project |
 | `jolta env` | Print `export` lines for `eval "$(jolta env)"` |
 | `jolta home` | Print the resolved `JAVA_HOME` for this directory |
-| `jolta hook [zsh\|bash]` | Print the cd hook that keeps `JAVA_HOME` in sync |
+| `jolta hook [shell]` | Print the cd hook (zsh, bash, fish, powershell) |
+| `jolta completions [shell]` | Print tab-completions (zsh, bash, fish) |
+| `jolta toolchains [--write]` | Maven `toolchains.xml` (+ Gradle hint) from installed JDKs |
+| `jolta mirror sync\|verify` | Build or re-hash an offline JDK mirror |
 | `jolta reshim` | Regenerate shims after installing JDKs outside jolta |
-| `jolta doctor` | Diagnose PATH/shim/`JAVA_HOME` problems |
+| `jolta doctor [--fix]` | Diagnose PATH/shim/`JAVA_HOME` problems; `--fix` repairs the safe parts |
 | `jolta implode` | Uninstall jolta completely |
 
 ## JAVA_HOME, Maven & Gradle
@@ -244,8 +255,9 @@ Two mechanisms keep `JAVA_HOME` correct:
 
 1. **Shims** export `JAVA_HOME` for everything they exec — any process started
    through `java`, `javac`, etc. sees the right value.
-2. **The shell hook** (installed by `jolta setup`, via `eval "$(jolta hook zsh)"`)
-   re-resolves `JAVA_HOME` in your interactive shell every time you `cd`. This covers
+2. **The shell hook** (installed by `jolta setup`, via `eval "$(jolta hook zsh)"` —
+   zsh, bash, fish, and PowerShell) re-resolves `JAVA_HOME` in your interactive
+   shell every time you `cd`. This covers
    tools that read `JAVA_HOME` directly instead of running `java` from `PATH` —
    Maven, Gradle, IDEs launched from a terminal. If a pin can't be satisfied, the
    hook unsets `JAVA_HOME` so builds fail loudly through the shim instead of silently
@@ -254,6 +266,18 @@ Two mechanisms keep `JAVA_HOME` correct:
 Don't `export JAVA_HOME` manually in your profile — the hook owns it. In scripts and
 CI (where the hook isn't loaded), use `jolta exec mvn ...` or `eval "$(jolta env)"`.
 `jolta doctor` checks that `JAVA_HOME` matches the pin for the current directory.
+
+**Multi-JDK builds** (Maven Toolchains, Gradle `jvmToolchain(...)`) resolve JDKs on
+their own — Gradle will even download one behind your back. `jolta toolchains --write`
+hands them the jolta-managed set instead: it generates `~/.m2/toolchains.xml` from
+your installed JDKs (one entry per distro+major, refusing to clobber a hand-written
+file) and prints the matching `org.gradle.java.installations.paths` line for
+`~/.gradle/gradle.properties`. Re-run it after installing or removing JDKs.
+
+**Tab completions:** `eval "$(jolta completions zsh)"` (also `bash`; for fish, write
+it to `~/.config/fish/completions/jolta.fish`). Commands and distros are generated
+from the binary's own tables, and `uninstall`/`upgrade`/`prune` complete against
+what's actually installed.
 
 ## Notes & limits
 
