@@ -79,6 +79,15 @@ jobs:
           if (-not $env:WINGET_TOKEN) { Write-Host "WINGET_TOKEN not set - skipping winget submission"; exit 0 }
           $v = "$env:GITHUB_REF_NAME".TrimStart("v")
           Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
-          .\wingetcreate.exe update OneAppPlatform.Jolta --version $v `
+          $out = & .\wingetcreate.exe update OneAppPlatform.Jolta --version $v `
             --urls "https://github.com/OneAppPlatform/jolta/releases/download/v$v/jolta-x86_64-pc-windows-msvc.zip" `
-            --submit --token $env:WINGET_TOKEN
+            --submit --token $env:WINGET_TOKEN 2>&1
+          $code = $LASTEXITCODE
+          Write-Host ($out -join "`n")
+          # updates only work once the package exists — until the one-time
+          # `wingetcreate new` submission merges, skip instead of failing
+          if ($code -ne 0 -and "$out" -match "was not found") {
+            Write-Host "::notice::OneAppPlatform.Jolta is not in winget-pkgs yet - make the one-time 'wingetcreate new' submission; skipping."
+            exit 0
+          }
+          exit $code
