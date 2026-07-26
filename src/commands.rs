@@ -156,6 +156,7 @@ fn profile_file() -> PathBuf {
             let bp = home_dir().join(".bash_profile");
             if bp.is_file() { bp } else { home_dir().join(".bashrc") }
         }
+        "fish" => home_dir().join(".config").join("fish").join("config.fish"),
         _ => home_dir().join(".profile"),
     }
 }
@@ -250,24 +251,37 @@ pub fn cmd_setup() {
 /// `doctor --fix`; Windows PATH stays manual (see cmd_setup).
 #[cfg(unix)]
 fn ensure_profile() -> bool {
+    let shell = shell_name();
+    let fish = shell == "fish";
     let profile = profile_file();
+    // fish config lives under ~/.config/fish/, which may not exist yet
+    if let Some(parent) = profile.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     let existing = fs::read_to_string(&profile).unwrap_or_default();
     let mut additions = String::new();
     if existing.contains(">>> jolta >>>") {
         println!("{} PATH setup already in {}", ok_mark(), profile.display());
     } else {
-        additions.push_str(
-            "\n# >>> jolta >>>\nexport JOLTA_HOME=\"$HOME/.jolta\"\nexport PATH=\"$JOLTA_HOME/shims:$JOLTA_HOME/bin:$PATH\"\n# <<< jolta <<<\n",
-        );
+        additions.push_str(if fish {
+            "\n# >>> jolta >>>\nset -gx JOLTA_HOME $HOME/.jolta\nset -gx PATH $JOLTA_HOME/shims $JOLTA_HOME/bin $PATH\n# <<< jolta <<<\n"
+        } else {
+            "\n# >>> jolta >>>\nexport JOLTA_HOME=\"$HOME/.jolta\"\nexport PATH=\"$JOLTA_HOME/shims:$JOLTA_HOME/bin:$PATH\"\n# <<< jolta <<<\n"
+        });
         println!("{} added PATH setup to {}", ok_mark(), profile.display());
     }
     if existing.contains("jolta hook") {
         println!("{} JAVA_HOME hook already in {}", ok_mark(), profile.display());
     } else {
-        additions.push_str(&format!(
-            "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\neval \"$(jolta hook {})\"\n# <<< jolta hook <<<\n",
-            shell_name()
-        ));
+        if fish {
+            additions.push_str(
+                "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\njolta hook fish | source\n# <<< jolta hook <<<\n",
+            );
+        } else {
+            additions.push_str(&format!(
+                "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\neval \"$(jolta hook {shell})\"\n# <<< jolta hook <<<\n",
+            ));
+        }
         println!("{} added JAVA_HOME hook to {}", ok_mark(), profile.display());
     }
     if additions.is_empty() {
@@ -578,10 +592,13 @@ pub fn cmd_hook(shell: &str) {
         "bash" => print!(
             "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  if [ \"$_s\" != \"${{_JOLTA_STAMP:-}}\" ]; then\n    _JOLTA_STAMP=$_s\n    hash -r\n    _JOLTA_LAST_PWD=$PWD\n    _jolta_update_java_home\n    return\n  fi\n  [ \"${{_JOLTA_LAST_PWD:-}}\" = \"$PWD\" ] && return\n  _JOLTA_LAST_PWD=$PWD\n  _jolta_update_java_home\n}}\ncase \";${{PROMPT_COMMAND:-}};\" in\n  *\";_jolta_sync;\"*) ;;\n  *) PROMPT_COMMAND=\"_jolta_sync${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\nesac\n_jolta_sync\n"
         ),
+        "fish" => print!(
+            "function __jolta_update_java_home\n  set -l _jh (jolta home 2>/dev/null)\n  if test -n \"$_jh\"\n    set -gx JAVA_HOME $_jh\n  else\n    set -e JAVA_HOME\n  end\nend\nfunction __jolta_sync --on-event fish_prompt\n  set -l _dir \"$JOLTA_HOME\"\n  test -n \"$_dir\"; or set _dir \"$HOME/.jolta\"\n  set -l _s \"\"\n  if test -f \"$_dir/.stamp\"\n    read _s < \"$_dir/.stamp\"\n  end\n  if test \"$_s\" != \"$__jolta_stamp\"\n    set -g __jolta_stamp \"$_s\"\n    __jolta_update_java_home\n  end\nend\nfunction __jolta_cd --on-variable PWD\n  __jolta_update_java_home\nend\n__jolta_sync\n__jolta_update_java_home\n"
+        ),
         "powershell" | "pwsh" => print!(
             "function global:__jolta_update_java_home {{\n  $jh = & jolta home 2>$null\n  if ($LASTEXITCODE -eq 0 -and $jh) {{ $env:JAVA_HOME = \"$jh\" }}\n  else {{ Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue }}\n}}\n$global:__jolta_prev_prompt = $function:prompt\nfunction global:prompt {{ __jolta_update_java_home; & $global:__jolta_prev_prompt }}\n__jolta_update_java_home\n"
         ),
-        other => die(&format!("no hook available for shell '{other}' (zsh, bash, and powershell are supported)")),
+        other => die(&format!("no hook available for shell '{other}' (zsh, bash, fish, and powershell are supported)")),
     }
 }
 
