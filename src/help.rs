@@ -75,8 +75,9 @@ pub const PAGES: &[HelpPage] = &[
              instead of copied, so 'brew upgrade jolta' flows through automatically.",
             "Also adds two blocks to your shell profile: PATH setup that puts the \
              shims first, and a hook that keeps JAVA_HOME in sync as you cd between \
-             projects. Safe to re-run at any time — existing profile lines are \
-             never duplicated.",
+             projects. On Windows the user PATH is edited in the registry and the \
+             hook goes into your PowerShell profiles. Safe to re-run at any time — \
+             existing profile lines are never duplicated.",
         ],
         examples: &[("jolta setup", "install, then open a new shell to activate")],
     },

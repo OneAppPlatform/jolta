@@ -333,8 +333,11 @@ through brew's stable <code>opt</code> path, so <code>brew upgrade jolta</code>
 updates the shims and everything else with no further action; any other binary
 (curl installer, source build) is <em>copied</em>, so the downloaded file or
 checkout can be deleted afterwards. Idempotent — re-running from a newer binary
-upgrades the install and never duplicates profile lines. On Windows it prints the two manual steps instead (user
-<code>PATH</code> additions and the PowerShell <code>$PROFILE</code> hook line).</p>
+upgrades the install and never duplicates profile lines. On Windows, setup edits the
+user <code>PATH</code> in the registry itself (<code>REG_EXPAND_SZ</code> and
+<code>%VAR%</code> entries preserved, the change broadcast so new terminals see it)
+and adds the hook to every PowerShell profile — with the manual steps printed only
+as a fallback if editing fails. <code>implode</code> undoes both.</p>
 
 <h3 id="cmd-hook"><code>jolta hook [zsh|bash|fish|powershell]</code></h3>
 <p class="sig">Keeps <code>JAVA_HOME</code> in sync; everything else works without it.</p>

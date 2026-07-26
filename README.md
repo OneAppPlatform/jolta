@@ -67,12 +67,14 @@ Re-running setup from a newer build upgrades the installed copy.
 
 **Windows:** download `jolta-x86_64-pc-windows-msvc.zip` from the
 [releases page](https://github.com/OneAppPlatform/jolta/releases), unzip, and run
-`.\jolta.exe setup` (or build from source with `cargo build --release`),
-then follow the two printed steps: add the shims and bin directories to your user
-`PATH`, and add `jolta hook powershell | Out-String | Invoke-Expression` to your
-PowerShell `$PROFILE` for the `JAVA_HOME` hook. Shims are hard links (no Developer
-Mode needed), downloads come as zip, and discovery scans `Program Files` vendor
-directories plus `JAVA_HOME_<major>_*` environment variables.
+`.\jolta.exe setup` (or build from source with `cargo build --release`). Setup is
+first-class on Windows too: it adds the shims and bin directories to your user
+`PATH` in the registry (preserving `%VAR%` entries, with the change broadcast so
+newly opened terminals see it immediately) and adds the `JAVA_HOME` hook to every
+PowerShell profile — open a new terminal and you're done. `jolta implode` undoes
+both. Shims are hard links (no Developer Mode needed), downloads come as zip, and
+discovery scans `Program Files` vendor directories plus `JAVA_HOME_<major>_*`
+environment variables.
 
 ## Uninstall
 
