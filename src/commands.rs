@@ -19,50 +19,6 @@ use crate::paths::{home_dir, jolta_home, shims_dir, which};
 use crate::resolve::{clear_cache, read_pin, resolve, resolve_current};
 use crate::ui::{bad_mark, bold, cyan, die, dim, green, ok_mark, paint, warn_mark, yellow};
 
-pub fn usage() {
-    // pad BEFORE painting: ANSI escapes would break {:<21} alignment
-    let row = |cmd: &str, desc: &str| println!("  {} {desc}", cyan(&format!("{cmd:<21}")));
-    let cont = |desc: &str| println!("  {:<21} {}", "", dim(desc));
-
-    println!("{} — automatic per-project JDK switching (like Volta, for Java)\n", bold("jolta"));
-    println!("{}: jolta <command> [args]\n", bold("Usage"));
-    row("setup", "Install shims and add jolta to your shell profile");
-    row("pin <spec>", "Pin a Java version for this project (.java-version)");
-    row("default <spec>", "Set the global fallback Java version");
-    row("install <spec>", "Download a JDK (e.g. 21, corretto@21, graalvm@25)");
-    row("update, outdated", "Check jolta-managed JDKs for newer point releases");
-    row("upgrade [spec]", "Upgrade jolta-managed JDKs (all, or one: 21, corretto@21)");
-    row("uninstall <spec>", "Remove a jolta-managed JDK (25, temurin@25, or a full name)");
-    row("prune [spec] [-n]", "Remove superseded builds and stale non-LTS majors");
-    cont("keeps anything a project pin references; -n / --dry-run previews");
-    row("vendor [name]", "Show or set the preferred distro for vendorless specs");
-    row("list, ls", "List installed JDKs and where they come from");
-    row("catalog [x]", "The JDK catalog: latest per distro, per-major, or per-distro");
-    cont("(@v filters: temurin@21 all 21.x, temurin@21.0 all 21.0.x)");
-    cont("aliases: search, available, ls-remote");
-    cont("results cached 24h; --fresh refetches");
-    row("jdks", "Machine-readable list: major<TAB>version<TAB>distro<TAB>home");
-    row("current", "Show the Java version resolved for this directory");
-    row("which [tool]", "Show the full path the shim would exec (default: java)");
-    row("exec <cmd> [args]", "Run a command with JAVA_HOME and PATH set for this project");
-    row("env", "Print export statements for eval in scripts");
-    row("home", "Print the resolved JAVA_HOME for this directory");
-    row("hook [zsh|bash]", "Print shell hook code that keeps JAVA_HOME in sync on cd");
-    row("mirror sync|verify", "Build or check an offline JDK mirror for JOLTA_DOWNLOAD_BASE");
-    cont("sync <dir> [--from <base>] [--vendors a,b] [--majors 21,17]");
-    row("reshim", "Regenerate shims from installed JDKs");
-    row("doctor", "Diagnose common setup problems");
-    row("implode", "Uninstall jolta completely (~/.jolta + shell profile lines)");
-    row("version", "Print jolta's version");
-    println!(
-        "\nA <spec> is a version with an optional distro {}:",
-        dim("(distro@version or distro-version)")
-    );
-    println!("  21   21.0.4   1.8   corretto@21   graalvm-25   temurin@8");
-    println!("Downloadable distros: {} (default temurin).", cyan(&INSTALLABLE_VENDORS.join(", ")));
-    println!("Distro-less pins match any installed JDK of that major version.");
-}
-
 /// Every tool a current JDK ships. Shimmed unconditionally — before any JDK
 /// is installed — so the very first plain `java` reaches jolta and can
 /// trigger the bootstrap auto-install instead of falling through to the

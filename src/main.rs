@@ -7,6 +7,7 @@
 //! on main; test/smoke.sh is the conformance suite.
 
 mod commands;
+mod help;
 mod platform;
 mod download;
 mod install;
@@ -21,6 +22,7 @@ use std::path::Path;
 use std::process::{exit, Command};
 
 use commands::*;
+use help::{cmd_help, usage};
 use resolve::resolve_current;
 use ui::die;
 
@@ -141,7 +143,10 @@ fn main() {
         "doctor" => exit(cmd_doctor()),
         "implode" => cmd_implode(&rest),
         "version" | "-v" | "--version" => println!("jolta {VERSION}"),
-        "help" | "-h" | "--help" => usage(),
+        "help" | "-h" | "--help" => match rest.first() {
+            Some(topic) => cmd_help(topic),
+            None => usage(),
+        },
         other => {
             usage();
             die(&format!("unknown command '{other}'"));
