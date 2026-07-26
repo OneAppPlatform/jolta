@@ -19,6 +19,26 @@ use crate::paths::{home_dir, jolta_home, shims_dir, which};
 use crate::resolve::{clear_cache, read_pin, resolve, resolve_current};
 use crate::ui::{bad_mark, bold, cyan, die, dim, green, ok_mark, paint, warn_mark, yellow};
 
+/// Expand the `lts` / `latest` version keywords to a concrete major
+/// ("lts" -> "25", "corretto@lts" -> "corretto@25") using the live release
+/// universe. Non-keyword specs pass through untouched.
+fn expand_spec(spec: &str) -> String {
+    let (vendor, version) = parse_spec(spec);
+    let major = match version.to_ascii_lowercase().as_str() {
+        // offline fallback mirrors the first-run bootstrap: the known train
+        "lts" => release_universe().map_or(crate::resolve::FALLBACK_LTS, |(_, _, lts, _)| lts),
+        "latest" => match release_universe() {
+            Some((_, _, _, feature)) => feature,
+            None => die("cannot resolve 'latest' — the release index is unreachable (offline?)"),
+        },
+        _ => return spec.to_string(),
+    };
+    match vendor {
+        Some(v) => format!("{v}@{major}"),
+        None => major.to_string(),
+    }
+}
+
 /// Every tool a current JDK ships. Shimmed unconditionally — before any JDK
 /// is installed — so the very first plain `java` reaches jolta and can
 /// trigger the bootstrap auto-install instead of falling through to the
@@ -252,6 +272,7 @@ pub fn cmd_setup() {
 }
 
 pub fn cmd_pin(spec: &str) {
+    let spec = &expand_spec(spec);
     let (_, parsed_version) = parse_spec(spec);
     if major_of(&parsed_version).is_none() {
         // an unparseable pin would break every java invocation below this dir
@@ -289,6 +310,7 @@ pub fn cmd_pin(spec: &str) {
 }
 
 pub fn cmd_default(spec: &str) {
+    let spec = &expand_spec(spec);
     let (_, version) = parse_spec(spec);
     if major_of(&version).is_none() {
         // an unparseable default would break every java invocation on the box
@@ -457,6 +479,7 @@ pub fn cmd_hook(shell: &str) {
 }
 
 pub fn cmd_install(spec: &str) {
+    let spec = &expand_spec(spec);
     let (vendor, version) = parse_spec(spec);
     let vendor = vendor.unwrap_or_else(crate::jdk::default_vendor);
     major_of(&version)

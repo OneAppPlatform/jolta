@@ -14,7 +14,7 @@ use crate::ui::{die, paint};
 
 /// Newest LTS major, used only when the Adoptium metadata endpoint is
 /// unreachable but downloads still work (e.g. JOLTA_DOWNLOAD_BASE mirrors).
-const FALLBACK_LTS: u32 = 25;
+pub const FALLBACK_LTS: u32 = 25;
 
 /// Best home for a spec: filter by major (and distro when the spec names one,
 /// e.g. "corretto-21"); exact full-version match wins, else highest build.
