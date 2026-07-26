@@ -27,7 +27,9 @@ pub fn usage() {
     row("exec <cmd> [args]", "Run a command with JAVA_HOME and PATH set for this project");
     row("env", "Print export statements for eval in scripts");
     row("home", "Print the resolved JAVA_HOME for this directory");
-    row("hook [zsh|bash]", "Print shell hook code that keeps JAVA_HOME in sync on cd");
+    row("hook [shell]", "Print shell hook code that keeps JAVA_HOME in sync on cd");
+    row("completions [shell]", "Print shell completions (zsh, bash, fish)");
+    row("toolchains [--write]", "Maven toolchains.xml (+ Gradle hint) from installed JDKs");
     row("mirror [sync|verify]", "Build or check an offline JDK mirror for JOLTA_DOWNLOAD_BASE");
     row("reshim", "Regenerate shims from installed JDKs");
     row("doctor", "Diagnose common setup problems");
@@ -81,7 +83,7 @@ pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "pin",
         summary: "pin a Java version for this project",
-        usage: &["jolta pin <spec>"],
+        usage: &["jolta pin <spec> [--resolved]"],
         aliases: &[],
         about: &[
             "Writes <spec> to .java-version in the current directory. Every java, \
@@ -89,9 +91,13 @@ pub const PAGES: &[HelpPage] = &[
              JDK — the nearest .java-version above the working directory wins, \
              then the global default.",
             "Distro-less pins (21) match any installed JDK of that major version; \
-             distro pins (corretto@21) only match that distro. If no installed JDK \
-             matches, jolta downloads one on the spot (set JOLTA_NO_AUTO_INSTALL=1 \
-             to disable).",
+             distro pins (corretto@21) only match that distro. The keywords lts \
+             and latest expand to the current LTS / feature major. If no installed \
+             JDK matches, jolta downloads one on the spot (set \
+             JOLTA_NO_AUTO_INSTALL=1 to disable).",
+            "--resolved pins the exact version the spec lands on (21 becomes \
+             21.0.4) so CI and teammates can't drift onto a different point \
+             release.",
             "Commit .java-version so teammates and CI resolve the same JDK. An \
              existing SDKMAN .sdkmanrc is honored when no .java-version claims the \
              directory.",
@@ -99,7 +105,8 @@ pub const PAGES: &[HelpPage] = &[
         examples: &[
             ("jolta pin 21", "any installed 21.x"),
             ("jolta pin corretto@21", "Amazon Corretto specifically"),
-            ("jolta pin 21.0.4", "an exact point release"),
+            ("jolta pin lts", "the current LTS major"),
+            ("jolta pin 21 --resolved", "exact: writes e.g. 21.0.4"),
         ],
     },
     HelpPage {
@@ -110,13 +117,15 @@ pub const PAGES: &[HelpPage] = &[
         about: &[
             "Stores <spec> in $JOLTA_HOME/default. It is used whenever no \
              .java-version is found walking up from the working directory — your \
-             machine-wide Java. Project pins always win over it.",
+             machine-wide Java. Project pins always win over it. The keywords lts \
+             and latest expand to the current LTS / feature major.",
             "Your first 'jolta install' sets the default automatically so plain \
              'java' works right away.",
         ],
         examples: &[
             ("jolta default 21", "any installed 21.x"),
             ("jolta default temurin@25", "a specific distro"),
+            ("jolta default lts", "the current LTS major"),
         ],
     },
     HelpPage {
@@ -126,8 +135,9 @@ pub const PAGES: &[HelpPage] = &[
         aliases: &[],
         about: &[
             "Downloads and unpacks a JDK into $JOLTA_HOME/jdks, then regenerates \
-             the shims. A <spec> is a major (21), an exact version (21.0.4), or a \
-             distro-qualified form (corretto@21, graalvm-25).",
+             the shims. A <spec> is a major (21), an exact version (21.0.4), a \
+             distro-qualified form (corretto@21, graalvm-25), or the keywords lts \
+             / latest for the current LTS / feature major.",
             "Vendorless specs fetch your preferred distro (see 'jolta vendor') — \
              currently {default}. Downloadable distros: {distros}.",
             "Downloads are verified against the published SHA-256 checksum when \
@@ -242,7 +252,7 @@ pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "list",
         summary: "list installed JDKs and where they come from",
-        usage: &["jolta list"],
+        usage: &["jolta list [--json]"],
         aliases: &["ls"],
         about: &[
             "Shows every JDK jolta can use: jolta-managed installs in \
@@ -250,8 +260,13 @@ pub const PAGES: &[HelpPage] = &[
              /Library/Java, SDKMAN, and friends.",
             "The * marks the JDK active in the current directory, and the footer \
              says which pin selected it.",
+            "--json emits the same data for tooling: the pin plus one object per \
+             JDK (version, major, vendor, home, managed, active).",
         ],
-        examples: &[("jolta list", "")],
+        examples: &[
+            ("jolta list", ""),
+            ("jolta list --json | jq -r '.jdks[].home'", "for scripts and editors"),
+        ],
     },
     HelpPage {
         name: "catalog",
@@ -294,14 +309,18 @@ pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "current",
         summary: "show the Java version resolved here",
-        usage: &["jolta current"],
+        usage: &["jolta current [--json]"],
         aliases: &[],
         about: &[
             "Prints the version, distro, and home of the JDK a java command would \
              use in the current directory — plus which pin selected it (a \
-             project's .java-version, the global default, or the system JDK).",
+             project's .java-version, the global default, or the system JDK). \
+             --json emits the same as one object.",
         ],
-        examples: &[("jolta current", "")],
+        examples: &[
+            ("jolta current", ""),
+            ("jolta current --json", "{\"version\": ..., \"home\": ...}"),
+        ],
     },
     HelpPage {
         name: "which",
@@ -364,7 +383,7 @@ pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "hook",
         summary: "print the shell hook that keeps JAVA_HOME fresh",
-        usage: &["jolta hook [zsh|bash|powershell]"],
+        usage: &["jolta hook [zsh|bash|fish|powershell]"],
         aliases: &[],
         about: &[
             "Prints hook code for your shell (default: the one you're running). \
@@ -374,6 +393,49 @@ pub const PAGES: &[HelpPage] = &[
              only need this command for custom profiles or other shells.",
         ],
         examples: &[("eval \"$(jolta hook zsh)\"", "activate in the current shell")],
+    },
+    HelpPage {
+        name: "completions",
+        summary: "print shell completions",
+        usage: &["jolta completions [zsh|bash|fish]"],
+        aliases: &[],
+        about: &[
+            "Prints a completion script for your shell (default: the one you're \
+             running). Commands, distros, and flags are generated from the same \
+             tables the binary runs on, and uninstall/upgrade/prune complete \
+             against what is actually installed.",
+            "zsh: save it as _jolta on your fpath, or add \
+             eval \"$(jolta completions zsh)\" to ~/.zshrc after compinit. \
+             bash: add eval \"$(jolta completions bash)\" to ~/.bashrc. \
+             fish: write it to ~/.config/fish/completions/jolta.fish.",
+        ],
+        examples: &[
+            ("eval \"$(jolta completions zsh)\"", "activate in the current shell"),
+            ("jolta completions fish > ~/.config/fish/completions/jolta.fish", ""),
+        ],
+    },
+    HelpPage {
+        name: "toolchains",
+        summary: "Maven toolchains.xml from installed JDKs",
+        usage: &["jolta toolchains [--write]"],
+        aliases: &[],
+        about: &[
+            "Maven's toolchain resolution (and Gradle's auto-provisioning) \
+             discovers or downloads JDKs on its own, silently bypassing jolta. \
+             This command hands both build tools the jolta-managed set instead: \
+             one <toolchain> entry per distro+major, newest build wins.",
+            "Prints the XML to stdout by default. --write manages \
+             ~/.m2/toolchains.xml directly — it refuses to overwrite a file it \
+             didn't generate, so a hand-written toolchains.xml is never lost. \
+             Re-run it after installing or removing JDKs.",
+            "For Gradle, the matching \
+             org.gradle.java.installations.paths line for \
+             ~/.gradle/gradle.properties is printed alongside.",
+        ],
+        examples: &[
+            ("jolta toolchains", "print, e.g. to merge by hand"),
+            ("jolta toolchains --write", "manage ~/.m2/toolchains.xml"),
+        ],
     },
     HelpPage {
         name: "mirror",
@@ -416,7 +478,7 @@ pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "doctor",
         summary: "diagnose common setup problems",
-        usage: &["jolta doctor"],
+        usage: &["jolta doctor [--fix]"],
         aliases: &[],
         about: &[
             "Checks the whole chain: the install link, the shims, PATH order, what \
@@ -425,8 +487,15 @@ pub const PAGES: &[HelpPage] = &[
              when JOLTA_DOWNLOAD_BASE is set.",
             "Exits non-zero when something is broken, so it can gate CI or \
              provisioning scripts.",
+            "--fix repairs what is mechanically safe: rebuilds broken or missing \
+             shims and re-adds missing shell-profile blocks. Anything needing \
+             judgment (stale JAVA_HOME, mavenrc overrides, a dangling Homebrew \
+             link) is diagnosed only.",
         ],
-        examples: &[("jolta doctor", "")],
+        examples: &[
+            ("jolta doctor", ""),
+            ("jolta doctor --fix", "diagnose, then repair the safe parts"),
+        ],
     },
     HelpPage {
         name: "implode",
@@ -513,10 +582,11 @@ mod tests {
     /// step with the dispatch match when adding a command.
     #[test]
     fn every_command_has_a_help_page() {
-        const COMMANDS: [&str; 23] = [
+        const COMMANDS: [&str; 25] = [
             "setup", "pin", "default", "install", "update", "upgrade", "uninstall", "prune",
             "vendor", "list", "catalog", "jdks", "current", "which", "exec", "env", "home",
-            "hook", "mirror", "reshim", "doctor", "implode", "version",
+            "hook", "completions", "toolchains", "mirror", "reshim", "doctor", "implode",
+            "version",
         ];
         for c in COMMANDS {
             assert!(PAGES.iter().any(|p| p.name == c), "'{c}' has no help page");
