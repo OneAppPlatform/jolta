@@ -231,24 +231,77 @@ pub fn cmd_setup() {
 
     #[cfg(windows)]
     {
-        println!("{} add these to your user PATH (Settings > Environment Variables):", warn_mark());
-        println!("    {}", shims_dir().display());
-        println!("    {}", home.join("bin").display());
-        println!("{} then add this line to your PowerShell $PROFILE for the JAVA_HOME hook:", warn_mark());
-        println!("    jolta hook powershell | Out-String | Invoke-Expression");
-        println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
+        ensure_windows_env();
+        println!("{} setup complete {}", ok_mark(), dim("(open a new terminal to activate)"));
         return;
     }
-    #[allow(unreachable_code)]
+    #[cfg(unix)]
     {
         ensure_profile();
         println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
     }
 }
 
+/// Windows counterpart of ensure_profile(): put the shims and bin dirs on
+/// the user PATH (registry, REG_EXPAND_SZ preserved, WM_SETTINGCHANGE
+/// broadcast) and the JAVA_HOME hook into every PowerShell profile. Returns
+/// true if anything changed. Shared by setup and `doctor --fix`.
+#[cfg(windows)]
+fn ensure_windows_env() -> bool {
+    let mut changed = false;
+    let dirs = [shims_dir(), jolta_home().join("bin")];
+    match platform::add_user_path(&dirs) {
+        Some(true) => {
+            changed = true;
+            println!("{} added the shims and bin directories to your user PATH", ok_mark());
+        }
+        Some(false) => println!("{} user PATH already set up", ok_mark()),
+        None => {
+            println!(
+                "{} could not edit the user PATH — add these yourself (Settings > Environment Variables):",
+                warn_mark()
+            );
+            println!("    {}", dirs[0].display());
+            println!("    {}", dirs[1].display());
+        }
+    }
+    const HOOK_BLOCK: &str = "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\njolta hook powershell | Out-String | Invoke-Expression\n# <<< jolta hook <<<\n";
+    let profiles = platform::ps_profiles();
+    if profiles.is_empty() {
+        println!(
+            "{} no PowerShell found — add this line to your shell profile for the JAVA_HOME hook:",
+            warn_mark()
+        );
+        println!("    jolta hook powershell | Out-String | Invoke-Expression");
+    }
+    for profile in profiles {
+        let existing = fs::read_to_string(&profile).unwrap_or_default();
+        if existing.contains("jolta hook") {
+            println!("{} JAVA_HOME hook already in {}", ok_mark(), profile.display());
+            continue;
+        }
+        if let Some(parent) = profile.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let ok = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&profile)
+            .and_then(|mut f| f.write_all(HOOK_BLOCK.as_bytes()))
+            .is_ok();
+        if ok {
+            changed = true;
+            println!("{} added JAVA_HOME hook to {}", ok_mark(), profile.display());
+        } else {
+            println!("{} could not write {} — add the hook line yourself", warn_mark(), profile.display());
+        }
+    }
+    changed
+}
+
 /// Append the PATH and JAVA_HOME-hook blocks to the shell profile when they
 /// are missing. Returns true if anything was added. Shared by setup and
-/// `doctor --fix`; Windows PATH stays manual (see cmd_setup).
+/// `doctor --fix`.
 #[cfg(unix)]
 fn ensure_profile() -> bool {
     let shell = shell_name();
@@ -1257,27 +1310,22 @@ pub fn cmd_implode(args: &[String]) {
         }
     }
     #[cfg(windows)]
-    let _ = &profile;
-    #[cfg(unix)]
-    if let Ok(text) = fs::read_to_string(&profile) {
-        let mut out = String::new();
-        let mut skipping = false;
-        for line in text.lines() {
-            if line.contains("# >>> jolta hook") || line.contains("# >>> jolta >>>") {
-                skipping = true;
-            }
-            if !skipping {
-                out.push_str(line);
-                out.push('\n');
-            }
-            if line.contains("# <<< jolta hook <<<") || line.contains("# <<< jolta <<<") {
-                skipping = false;
-            }
+    {
+        let _ = &profile;
+        for p in platform::ps_profiles() {
+            strip_jolta_blocks(&p);
         }
-        if fs::write(&profile, out).is_ok() {
-            println!("{} removed jolta lines from {}", ok_mark(), profile.display());
+        match platform::remove_user_path(&[shims_dir(), home.join("bin")]) {
+            Some(true) => println!("{} removed jolta from your user PATH", ok_mark()),
+            Some(false) => {}
+            None => println!(
+                "{} could not edit the user PATH — remove the jolta entries yourself",
+                warn_mark()
+            ),
         }
     }
+    #[cfg(unix)]
+    strip_jolta_blocks(&profile);
     let _ = fs::remove_dir_all(&home);
     println!("{} removed {} — open a new shell to finish. So long!", ok_mark(), home.display());
 }
@@ -1358,6 +1406,29 @@ pub fn cmd_toolchains(rest: &[String]) {
         paint("2", "gradle: add this to ~/.gradle/gradle.properties to expose the same JDKs:", true),
         paint("2", &format!("  org.gradle.java.installations.paths={gradle_paths}"), true)
     );
+}
+
+/// Remove jolta's marked blocks (PATH + hook) from a profile file. Used by
+/// implode for the shell profile and, on Windows, the PowerShell profiles.
+fn strip_jolta_blocks(profile: &Path) {
+    let Ok(text) = fs::read_to_string(profile) else { return };
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        if line.contains("# >>> jolta hook") || line.contains("# >>> jolta >>>") {
+            skipping = true;
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+        if line.contains("# <<< jolta hook <<<") || line.contains("# <<< jolta <<<") {
+            skipping = false;
+        }
+    }
+    if out != text && fs::write(profile, out).is_ok() {
+        println!("{} removed jolta lines from {}", ok_mark(), profile.display());
+    }
 }
 
 /// CPU architecture of a compiled binary from its ELF/Mach-O header (8-20
@@ -1566,7 +1637,10 @@ pub fn cmd_doctor(fix: bool) -> i32 {
             fixed |= ensure_profile();
         }
         #[cfg(windows)]
-        let _ = needs_profile; // Windows PATH is set through the system UI
+        if needs_profile {
+            println!();
+            fixed |= ensure_windows_env();
+        }
         if fixed {
             println!(
                 "\n{} fixes applied — open a new shell, then re-run {} to confirm",
