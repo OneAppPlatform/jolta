@@ -37,11 +37,12 @@ pub fn usage() {
         "\nA <spec> is a version with an optional distro: {}",
         cyan("21  21.0.4  corretto@21  temurin@8")
     );
-    println!(
-        "Downloadable distros: {} (default {}).",
-        cyan(&INSTALLABLE_VENDORS.join(", ")),
-        bold(default_vendor())
-    );
+    // the default vendor is the bold one
+    let distros: Vec<String> = INSTALLABLE_VENDORS
+        .iter()
+        .map(|v| if *v == default_vendor() { bold(&cyan(v)) } else { cyan(v) })
+        .collect();
+    println!("Distros: {}", distros.join(", "));
     println!();
     println!("Run {} for a detailed description and examples.", cyan("jolta help <command>"));
 }
