@@ -271,7 +271,11 @@ pub fn cmd_setup() {
     println!("{} setup complete {}", ok_mark(), dim("(open a new shell to activate)"));
 }
 
-pub fn cmd_pin(spec: &str) {
+pub fn cmd_pin(rest: &[String]) {
+    let resolved_flag = rest.iter().any(|a| a == "--resolved");
+    let Some(spec) = rest.iter().find(|a| !a.starts_with('-')) else {
+        die("usage: jolta pin <spec> [--resolved]  (e.g. 21 or corretto@21)");
+    };
     let spec = &expand_spec(spec);
     let (_, parsed_version) = parse_spec(spec);
     if major_of(&parsed_version).is_none() {
@@ -302,6 +306,27 @@ pub fn cmd_pin(spec: &str) {
             );
         }
     }
+    // --resolved: pin the exact version of the JDK the spec lands on, so CI
+    // and teammates can't drift onto a different point release. The user's
+    // vendor choice (or deliberate lack of one) is preserved.
+    let spec = if resolved_flag {
+        match resolve(spec).as_deref().and_then(jdk_version) {
+            Some(v) => match parse_spec(spec).0 {
+                Some(vendor) => format!("{vendor}@{v}"),
+                None => v,
+            },
+            None => {
+                eprintln!(
+                    "{} --resolved: no installed JDK matches '{spec}' — pinning it as-is",
+                    paint("33", "jolta: warning:", true)
+                );
+                spec.to_string()
+            }
+        }
+    } else {
+        spec.to_string()
+    };
+    let spec = spec.as_str();
     fs::write(".java-version", format!("{spec}\n")).unwrap_or_else(|e| die(&format!("cannot write .java-version: {e}")));
     touch_stamp();
     let cwd = env::current_dir().unwrap_or_default();

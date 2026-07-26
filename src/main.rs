@@ -101,10 +101,7 @@ fn main() {
     }
     match cmd.as_str() {
         "setup" => cmd_setup(),
-        "pin" => match rest.first() {
-            Some(s) => cmd_pin(s),
-            None => die("usage: jolta pin <spec>  (e.g. 21 or corretto@21)"),
-        },
+        "pin" => cmd_pin(&rest),
         "default" => match rest.first() {
             Some(s) => cmd_default(s),
             None => die("usage: jolta default <spec>"),
