@@ -1,0 +1,27 @@
+<idea-plugin>
+    <id>dev.jolta.intellij</id>
+    <name>Jolta</name>
+    <vendor url="https://oneappplatform.github.io/jolta/">OneAppPlatform</vendor>
+
+    <description><![CDATA[
+        Hands-off JDK selection from your project's <code>.java-version</code>, powered by
+        <a href="https://oneappplatform.github.io/jolta/">jolta</a> — like Volta, but for Java.
+        <ul>
+            <li>Sets the project SDK, Gradle JVM, and Maven importer JDK from the jolta pin — nothing to configure.</li>
+            <li>Live: <code>jolta pin 25</code> in any terminal and the IDE switches immediately.</li>
+            <li>Installs the pinned JDK in the background when it's missing.</li>
+            <li>Survives <code>jolta upgrade</code> — SDK entries are repointed, never left dangling.</li>
+        </ul>
+        Requires the jolta CLI (<code>brew install OneAppPlatform/tap/jolta</code>).
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends optional="true" config-file="jolta-gradle.xml">com.intellij.gradle</depends>
+    <depends optional="true" config-file="jolta-maven.xml">org.jetbrains.idea.maven</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="dev.jolta.intellij.JoltaStartup"/>
+        <notificationGroup id="Jolta" displayType="BALLOON"/>
+    </extensions>
+</idea-plugin>
