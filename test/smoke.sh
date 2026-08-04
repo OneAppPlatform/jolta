@@ -33,6 +33,18 @@ export PATH="$JOLTA_HOME/shims:$bindir:$PATH"
 
 # Pick two distinct majors that exist on this machine
 majors=$("$JOLTA_BIN" jdks | cut -f1 | sort -un)
+# On a machine where jolta IS the only source of JDKs (nothing in
+# /Library/Java, no /usr/lib/jvm), the isolated home starts empty and every
+# test below would skip. Borrow the real home's JDKs read-only, by symlink.
+if [ -z "$majors" ] && [ -d "${REAL_JOLTA_HOME:-$HOME/.jolta}/jdks" ]; then
+  for j in "${REAL_JOLTA_HOME:-$HOME/.jolta}"/jdks/*; do
+    [ -d "$j" ] || continue
+    ln -s "$j" "$JOLTA_HOME/jdks/$(basename "$j")" 2>/dev/null || true
+  done
+  "$JOLTA_BIN" reshim >/dev/null
+  majors=$("$JOLTA_BIN" jdks | cut -f1 | sort -un)
+  [ -n "$majors" ] && echo "note: borrowed JDKs from ${REAL_JOLTA_HOME:-$HOME/.jolta}/jdks"
+fi
 m1=$(printf '%s\n' "$majors" | head -n1)
 m2=$(printf '%s\n' "$majors" | tail -n1)
 if [ -z "$m1" ] || [ "$m1" = "$m2" ]; then
@@ -119,6 +131,44 @@ if command -v zsh >/dev/null 2>&1; then
     jolta default '"$m1"' >/dev/null 2>&1
   ')
   check "zsh hook: stamp sync picks up default change" "sync:$(cd "$work/p2" && jolta home)" "$sync_out"
+  # the pin itself can change under a shell that never moves: git checkout of a
+  # branch with a different .java-version, a rebase, or just editing the file.
+  # No cd, no jolta command, so neither chpwd nor the stamp fires.
+  mkdir -p "$work/hk-zsh" && echo "$m1" > "$work/hk-zsh/.java-version"
+  pin_out=$(zsh -f -c '
+    export PATH='"$JOLTA_HOME/shims:$bindir"':$PATH
+    export JOLTA_HOME='"$JOLTA_HOME"'
+    cd '"$work/hk-zsh"'
+    eval "$(jolta hook zsh)"
+    echo "before:$JAVA_HOME"
+    echo '"$m2"' > .java-version   # stands in for a checkout rewriting the pin
+    _jolta_sync                    # what precmd runs at the next prompt
+    echo "edited:$JAVA_HOME"
+  ')
+  check "zsh hook: pin here starts at $m1" "before:$(cd "$work/p1" && jolta home)" "$pin_out"
+  check "zsh hook: pin edited under us applies with no cd" \
+    "edited:$(cd "$work/p2" && jolta home)" "$pin_out"
+  # the real thing: two branches, two pins, one stationary shell
+  if command -v git >/dev/null 2>&1; then
+    (cd "$work/hk-zsh" && rm -f .java-version \
+      && git init -q . && git config user.email t@t && git config user.name t \
+      && echo "$m1" > .java-version && git add -A && git commit -qm base \
+      && git checkout -q -b other && echo "$m2" > .java-version \
+      && git commit -qam other && git checkout -q -) >/dev/null 2>&1
+    co_out=$(zsh -f -c '
+      export PATH='"$JOLTA_HOME/shims:$bindir"':$PATH
+      export JOLTA_HOME='"$JOLTA_HOME"'
+      cd '"$work/hk-zsh"'
+      eval "$(jolta hook zsh)"
+      echo "base:$JAVA_HOME"
+      git checkout -q other
+      _jolta_sync
+      echo "other:$JAVA_HOME"
+    ')
+    check "zsh hook: base branch pins $m1" "base:$(cd "$work/p1" && jolta home)" "$co_out"
+    check "zsh hook: git checkout swaps JAVA_HOME in place" \
+      "other:$(cd "$work/p2" && jolta home)" "$co_out"
+  fi
 else
   echo "skip zsh hook tests (zsh not found)"
 fi
@@ -134,6 +184,20 @@ if command -v bash >/dev/null 2>&1; then
   ')
   check "bash hook: pin $m1 dir" "p1:$(cd "$work/p1" && jolta home)" "$hook_out"
   check "bash hook: unmatched pin unsets" "p3:unset" "$hook_out"
+  mkdir -p "$work/hk-bash" && echo "$m1" > "$work/hk-bash/.java-version"
+  pin_out=$(bash --noprofile --norc -c '
+    export PATH='"$JOLTA_HOME/shims:$bindir"':$PATH
+    export JOLTA_HOME='"$JOLTA_HOME"'
+    cd '"$work/hk-bash"'
+    eval "$(jolta hook bash)"
+    echo "before:$JAVA_HOME"
+    echo '"$m2"' > .java-version
+    eval "$PROMPT_COMMAND"
+    echo "edited:$JAVA_HOME"
+  ')
+  check "bash hook: pin here starts at $m1" "before:$(cd "$work/p1" && jolta home)" "$pin_out"
+  check "bash hook: pin edited under us applies with no cd" \
+    "edited:$(cd "$work/p2" && jolta home)" "$pin_out"
 else
   echo "skip bash hook tests (bash not found)"
 fi

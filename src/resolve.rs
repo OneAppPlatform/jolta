@@ -302,7 +302,7 @@ pub fn read_pin() -> Pin {
 }
 
 /// Download the pinned JDK on demand, Volta-style. `auto_install` is true only
-/// for shims / exec / env — never the cd hook — and JOLTA_NO_AUTO_INSTALL wins.
+/// for shims / exec / env — never the shell hook — and JOLTA_NO_AUTO_INSTALL wins.
 fn try_auto_install(spec: &str) -> bool {
     if env::var("JOLTA_NO_AUTO_INSTALL").is_ok() {
         return false;

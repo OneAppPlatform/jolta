@@ -27,7 +27,7 @@ pub fn usage() {
     row("exec <cmd> [args]", "Run a command with JAVA_HOME and PATH set for this project");
     row("env", "Print export statements for eval in scripts");
     row("home", "Print the resolved JAVA_HOME for this directory");
-    row("hook [shell]", "Print shell hook code that keeps JAVA_HOME in sync on cd");
+    row("hook [shell]", "Print shell hook code that keeps JAVA_HOME in sync");
     row("completions [shell]", "Print shell completions (zsh, bash, fish)");
     row("toolchains [--write]", "Maven toolchains.xml (+ Gradle hint) from installed JDKs");
     row("mirror [sync|verify]", "Build or check an offline JDK mirror for JOLTA_DOWNLOAD_BASE");
@@ -74,8 +74,8 @@ pub const PAGES: &[HelpPage] = &[
              shims/. Homebrew installs are linked through brew's stable opt path \
              instead of copied, so 'brew upgrade jolta' flows through automatically.",
             "Also adds two blocks to your shell profile: PATH setup that puts the \
-             shims first, and a hook that keeps JAVA_HOME in sync as you cd between \
-             projects. On Windows the user PATH is edited in the registry and the \
+             shims first, and a hook that keeps JAVA_HOME in sync with whichever \
+             pin applies. On Windows the user PATH is edited in the registry and the \
              hook goes into your PowerShell profiles. Safe to re-run at any time — \
              existing profile lines are never duplicated.",
         ],
@@ -388,8 +388,10 @@ pub const PAGES: &[HelpPage] = &[
         aliases: &[],
         about: &[
             "Prints hook code for your shell (default: the one you're running). \
-             The hook re-exports JAVA_HOME when you cd, and notices installs, \
-             upgrades, and pin changes made from other shells at the next prompt.",
+             The hook re-exports JAVA_HOME when you cd, when the pin file changes \
+             under you (a git checkout or an edit — no cd needed), and when an \
+             install, upgrade, or default from another shell changes what resolves. \
+             Each prompt costs a builtin file read; jolta runs only on a real change.",
             "'jolta setup' adds the eval line to your profile automatically — you \
              only need this command for custom profiles or other shells.",
         ],

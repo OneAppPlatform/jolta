@@ -274,7 +274,7 @@ fn ensure_windows_env() -> bool {
             println!("    {}", dirs[1].display());
         }
     }
-    const HOOK_BLOCK: &str = "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\njolta hook powershell | Out-String | Invoke-Expression\n# <<< jolta hook <<<\n";
+    const HOOK_BLOCK: &str = "\n# >>> jolta hook (keeps JAVA_HOME in sync with the pin in effect) >>>\njolta hook powershell | Out-String | Invoke-Expression\n# <<< jolta hook <<<\n";
     let profiles = platform::ps_profiles();
     if profiles.is_empty() {
         println!(
@@ -337,11 +337,11 @@ fn ensure_profile() -> bool {
     } else {
         if fish {
             additions.push_str(
-                "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\njolta hook fish | source\n# <<< jolta hook <<<\n",
+                "\n# >>> jolta hook (keeps JAVA_HOME in sync with the pin in effect) >>>\njolta hook fish | source\n# <<< jolta hook <<<\n",
             );
         } else {
             additions.push_str(&format!(
-                "\n# >>> jolta hook (keeps JAVA_HOME in sync with your cwd) >>>\neval \"$(jolta hook {shell})\"\n# <<< jolta hook <<<\n",
+                "\n# >>> jolta hook (keeps JAVA_HOME in sync with the pin in effect) >>>\neval \"$(jolta hook {shell})\"\n# <<< jolta hook <<<\n",
             ));
         }
         println!("{} added JAVA_HOME hook to {}", ok_mark(), profile.display());
@@ -642,24 +642,21 @@ pub fn cmd_home() {
     println!("{}", r.home.display());
 }
 
+/// The pin-tracking half of the hook, shared by zsh and bash; each shell then
+/// appends its own rehash builtin and registration (see src/hooks/).
+const HOOK_COMMON: &str = include_str!("hooks/common.sh");
+
 pub fn cmd_hook(shell: &str) {
-    // Mutating jolta commands touch $JOLTA_HOME/.stamp; the pre-prompt sync
-    // notices (one builtin file read, no fork) and refreshes JAVA_HOME plus
-    // the shell's command cache — so an install/uninstall/default in one
-    // shell can't leave this one running a stale JDK via JAVA_HOME consumers.
+    // The pre-prompt sync watches two things, both with builtins only (no
+    // fork): $JOLTA_HOME/.stamp, touched by mutating jolta commands, so an
+    // install/uninstall/default in one shell can't leave this one on a stale
+    // JDK; and a fingerprint of the pin file in effect, so a git checkout or
+    // an edit that rewrites .java-version applies without a cd out and back.
     match shell {
-        "zsh" => print!(
-            "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  [ \"$_s\" = \"${{_JOLTA_STAMP:-}}\" ] && return\n  _JOLTA_STAMP=$_s\n  rehash\n  _jolta_update_java_home\n}}\nautoload -Uz add-zsh-hook\nadd-zsh-hook chpwd _jolta_update_java_home\nadd-zsh-hook precmd _jolta_sync\n_jolta_sync\n_jolta_update_java_home\n"
-        ),
-        "bash" => print!(
-            "_jolta_update_java_home() {{\n  local _jh\n  if _jh=$(jolta home 2>/dev/null); then\n    export JAVA_HOME=$_jh\n  else\n    unset JAVA_HOME\n  fi\n}}\n_jolta_sync() {{\n  local _s=\"\"\n  [ -f \"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\" ] && _s=$(<\"${{JOLTA_HOME:-$HOME/.jolta}}/.stamp\")\n  if [ \"$_s\" != \"${{_JOLTA_STAMP:-}}\" ]; then\n    _JOLTA_STAMP=$_s\n    hash -r\n    _JOLTA_LAST_PWD=$PWD\n    _jolta_update_java_home\n    return\n  fi\n  [ \"${{_JOLTA_LAST_PWD:-}}\" = \"$PWD\" ] && return\n  _JOLTA_LAST_PWD=$PWD\n  _jolta_update_java_home\n}}\ncase \";${{PROMPT_COMMAND:-}};\" in\n  *\";_jolta_sync;\"*) ;;\n  *) PROMPT_COMMAND=\"_jolta_sync${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\nesac\n_jolta_sync\n"
-        ),
-        "fish" => print!(
-            "function __jolta_update_java_home\n  set -l _jh (jolta home 2>/dev/null)\n  if test -n \"$_jh\"\n    set -gx JAVA_HOME $_jh\n  else\n    set -e JAVA_HOME\n  end\nend\nfunction __jolta_sync --on-event fish_prompt\n  set -l _dir \"$JOLTA_HOME\"\n  test -n \"$_dir\"; or set _dir \"$HOME/.jolta\"\n  set -l _s \"\"\n  if test -f \"$_dir/.stamp\"\n    read _s < \"$_dir/.stamp\"\n  end\n  if test \"$_s\" != \"$__jolta_stamp\"\n    set -g __jolta_stamp \"$_s\"\n    __jolta_update_java_home\n  end\nend\nfunction __jolta_cd --on-variable PWD\n  __jolta_update_java_home\nend\n__jolta_sync\n__jolta_update_java_home\n"
-        ),
-        "powershell" | "pwsh" => print!(
-            "function global:__jolta_update_java_home {{\n  $jh = & jolta home 2>$null\n  if ($LASTEXITCODE -eq 0 -and $jh) {{ $env:JAVA_HOME = \"$jh\" }}\n  else {{ Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue }}\n}}\n$global:__jolta_prev_prompt = $function:prompt\nfunction global:prompt {{ __jolta_update_java_home; & $global:__jolta_prev_prompt }}\n__jolta_update_java_home\n"
-        ),
+        "zsh" => print!("{HOOK_COMMON}{}", include_str!("hooks/zsh.sh")),
+        "bash" => print!("{HOOK_COMMON}{}", include_str!("hooks/bash.sh")),
+        "fish" => print!("{}", include_str!("hooks/fish.fish")),
+        "powershell" | "pwsh" => print!("{}", include_str!("hooks/powershell.ps1")),
         other => die(&format!("no hook available for shell '{other}' (zsh, bash, fish, and powershell are supported)")),
     }
 }
@@ -1574,7 +1571,7 @@ pub fn cmd_doctor(fix: bool) -> i32 {
         }
         Err(_) => {
             println!("  JAVA_HOME:     {} not set — shims still work, but mvn/gradle prefer JAVA_HOME;", warn_mark());
-            println!("                 run \"jolta setup\" to install the cd hook that keeps it in sync");
+            println!("                 run \"jolta setup\" to install the shell hook that keeps it in sync");
             needs_profile = true;
         }
     }

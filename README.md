@@ -62,7 +62,7 @@ cargo build --release && ./target/release/jolta setup
 `setup` installs a self-contained copy of jolta into `~/.jolta` (you can delete the
 clone afterward), generates shims for every JDK it can find, and appends two small
 marked blocks to your shell profile: one putting `~/.jolta/shims` on your `PATH`, one
-enabling the `JAVA_HOME` cd hook. Open a new shell and run `jolta doctor` to verify.
+enabling the `JAVA_HOME` shell hook. Open a new shell and run `jolta doctor` to verify.
 Re-running setup from a newer build upgrades the installed copy.
 
 **Windows:** download `jolta-x86_64-pc-windows-msvc.zip` from the
@@ -188,7 +188,7 @@ SDKMAN, `/usr/lib/jvm`) via `/usr/libexec/java_home` on macOS, and — like Volt
 **downloads missing ones on demand**: if a project pins a version you don't have,
 the first `java`/`javac` invocation (or `jolta pin`/`exec`/`env`) fetches the
 matching Eclipse Temurin build from Adoptium into `~/.jolta/jdks` and carries on.
-Auto-install never triggers from the cd hook (changing directories won't start a
+Auto-install never triggers from the shell hook (changing directories or branches won't start a
 download), is safe under parallel builds (concurrent installs are serialized by a
 lock), and can be disabled with `JOLTA_NO_AUTO_INSTALL=1`.
 
@@ -243,7 +243,7 @@ Every command has a detailed page with examples: **`jolta help <command>`**.
 | `jolta exec <cmd>` | Run any command with `JAVA_HOME`/`PATH` set for this project |
 | `jolta env` | Print `export` lines for `eval "$(jolta env)"` |
 | `jolta home` | Print the resolved `JAVA_HOME` for this directory |
-| `jolta hook [shell]` | Print the cd hook (zsh, bash, fish, powershell) |
+| `jolta hook [shell]` | Print the shell hook (zsh, bash, fish, powershell) |
 | `jolta completions [shell]` | Print tab-completions (zsh, bash, fish) |
 | `jolta toolchains [--write]` | Maven `toolchains.xml` (+ Gradle hint) from installed JDKs |
 | `jolta mirror sync\|verify` | Build or re-hash an offline JDK mirror |
@@ -259,11 +259,19 @@ Two mechanisms keep `JAVA_HOME` correct:
    through `java`, `javac`, etc. sees the right value.
 2. **The shell hook** (installed by `jolta setup`, via `eval "$(jolta hook zsh)"` —
    zsh, bash, fish, and PowerShell) re-resolves `JAVA_HOME` in your interactive
-   shell every time you `cd`. This covers
+   shell whenever the pin in effect changes. This covers
    tools that read `JAVA_HOME` directly instead of running `java` from `PATH` —
    Maven, Gradle, IDEs launched from a terminal. If a pin can't be satisfied, the
    hook unsets `JAVA_HOME` so builds fail loudly through the shim instead of silently
    using the wrong JDK.
+
+   "Whenever the pin changes" means more than `cd`: a `git checkout` of a branch with
+   a different `.java-version`, a rebase, or an editor rewriting the file all apply at
+   the next prompt — no `cd ../ && cd -` dance — as do installs, upgrades, and
+   `jolta default` run from another shell. The check runs before every prompt but is
+   shell builtins only (walk up for the nearest pin file, read it, compare, plus one
+   read of `$JOLTA_HOME/.stamp`); `jolta` itself runs only when something actually
+   changed, so an idle prompt — or a `cd` that doesn't change the pin — forks nothing.
 
 Don't `export JAVA_HOME` manually in your profile — the hook owns it. In scripts and
 CI (where the hook isn't loaded), use `jolta exec mvn ...` or `eval "$(jolta env)"`.

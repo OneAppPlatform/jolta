@@ -39,7 +39,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
   "url": "https://oneappplatform.github.io/jolta/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "softwareVersion": "0.8.0",
+  "softwareVersion": "0.8.1",
   "license": "https://opensource.org/license/mit",
   "downloadUrl": "https://github.com/OneAppPlatform/jolta/releases",
   "sameAs": "https://github.com/OneAppPlatform/jolta",
@@ -133,7 +133,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <tr><td><code>jolta exec &lt;cmd&gt;</code></td><td>Run any command with <code>JAVA_HOME</code>/<code>PATH</code> set</td></tr>
 <tr><td><code>jolta env</code></td><td>Print <code>export</code> lines for <code>eval</code></td></tr>
 <tr><td><code>jolta home</code></td><td>Print the resolved <code>JAVA_HOME</code></td></tr>
-<tr><td><code>jolta hook [shell]</code></td><td>Print the cd hook (zsh, bash, fish, powershell)</td></tr>
+<tr><td><code>jolta hook [shell]</code></td><td>Print the shell hook (zsh, bash, fish, powershell)</td></tr>
 <tr><td><code>jolta completions [shell]</code></td><td>Print tab-completions (zsh, bash, fish)</td></tr>
 <tr><td><code>jolta toolchains [--write]</code></td><td>Maven <code>toolchains.xml</code> (+ Gradle hint) from installed JDKs</td></tr>
 <tr><td><code>jolta mirror sync|verify</code></td><td>Build or re-hash an offline JDK mirror (<code>JOLTA_DOWNLOAD_BASE</code>)</td></tr>
@@ -511,9 +511,13 @@ their upgrades apply automatically.</p>
 <ol>
   <li><strong>Shims</strong> export it for everything they exec.</li>
   <li><strong>The shell hook</strong> (installed by setup; zsh, bash, fish, and
-      PowerShell) re-resolves it every time you change directory — covering tools that
-      read <code>JAVA_HOME</code> directly, like Maven, Gradle, and IDEs launched from
-      a terminal. If a pin can't be satisfied the hook <em>unsets</em>
+      PowerShell) re-resolves it whenever the pin in effect changes — covering tools
+      that read <code>JAVA_HOME</code> directly, like Maven, Gradle, and IDEs launched
+      from a terminal. That is more than <code>cd</code>: a <code>git checkout</code>
+      that swaps <code>.java-version</code> under a shell that never moved applies at
+      the next prompt too, as do installs and defaults from another shell. The
+      per-prompt check is shell builtins only — <code>jolta</code> runs only on a real
+      change. If a pin can't be satisfied the hook <em>unsets</em>
       <code>JAVA_HOME</code>, so builds fail loudly rather than silently using the wrong
       JDK.</li>
 </ol>
