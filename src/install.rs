@@ -9,7 +9,10 @@ use std::time::Duration;
 
 use crate::commands::cmd_reshim;
 use crate::download::download;
-use crate::jdk::{is_exact, jdk_version, major_of, managed_home, tool_bin, INSTALLABLE_VENDORS};
+use crate::jdk::{
+    is_exact, jdk_version, major_of, managed_home, tool_bin, version_from_java_output, version_from_name,
+    version_of, INSTALLABLE_VENDORS,
+};
 use crate::paths::jolta_home;
 use crate::resolve::resolve;
 use crate::ui::{bold, cyan, die, dim, ok_mark, paint};
@@ -666,7 +669,7 @@ fn archive_version(archive: &Path) -> Option<String> {
         fs::read_dir(&tmp)
             .ok()
             .and_then(|mut e| e.find_map(|x| x.ok().map(|x| x.path()).filter(|p| p.is_dir())))
-            .and_then(|top| jdk_version(&managed_home(&top)))
+            .and_then(|top| version_of(&managed_home(&top)))
     } else {
         None
     };
@@ -912,7 +915,7 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
             }
             if let Some(h) = resolve(&format!("{vendor}-{version}")) {
                 println!("{} {vendor} {version} installed by the other process", ok_mark());
-                return Ok(jdk_version(&h).unwrap_or_default());
+                return Ok(version_of(&h).unwrap_or_default());
             }
             if lock.is_dir() {
                 die(&format!("timed out waiting for concurrent install (remove {} if stale)", lock.display()));
@@ -929,7 +932,7 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     if is_exact(version) {
         if let Some(h) = resolve(&format!("{vendor}-{version}")) {
             println!("  {} {vendor} {version} is already installed", ok_mark());
-            return Ok(jdk_version(&h).unwrap_or_default());
+            return Ok(version_of(&h).unwrap_or_default());
         }
     }
 
@@ -1052,12 +1055,20 @@ pub fn install_vendor_spec(vendor: &str, version: &str) -> Result<String, ()> {
     // actually runs before promoting it. Spawn errors AND nonzero exits both
     // count — macOS "helpfully" execs unknown formats via sh, which then fails.
     let probe = Command::new(tool_bin(&home, "java")).arg("-version").output();
-    if !probe.is_ok_and(|o| o.status.success()) {
+    let Ok(probe) = probe.and_then(|o| if o.status.success() { Ok(o) } else { Err(std::io::ErrorKind::Other.into()) })
+    else {
         fail("extracted java cannot execute on this machine (wrong architecture or C library?)");
         return Err(());
-    }
-    let Some(full) = jdk_version(&home) else {
-        fail("no release file in extracted JDK");
+    };
+    // Not every build ships a release file — Corretto 8 on macOS ships none —
+    // so ask the JVM that just proved it runs, and only then fall back to the
+    // archive's directory name (which for those builds is bare "8").
+    let banner = String::from_utf8_lossy(if probe.stderr.is_empty() { &probe.stdout } else { &probe.stderr });
+    let Some(full) = jdk_version(&home)
+        .or_else(|| version_from_java_output(&banner))
+        .or_else(|| version_from_name(&top))
+    else {
+        fail("cannot determine the version of the extracted JDK (no release file, and java -version said nothing usable)");
         return Err(());
     };
 

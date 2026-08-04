@@ -11,7 +11,7 @@ use crate::install::{
     prune_superseded, release_universe, vendor_versions,
 };
 use crate::jdk::{
-    is_exact, jdk_version, list_all, list_managed, list_system, major_of, numkey, parse_spec,
+    is_exact, list_all, list_managed, list_system, major_of, numkey, parse_spec, version_of,
     system_default, tool_bin, vendor_of, INSTALLABLE_VENDORS, KNOWN_VENDORS,
 };
 use crate::platform;
@@ -398,7 +398,7 @@ pub fn cmd_pin(rest: &[String]) {
     // and teammates can't drift onto a different point release. The user's
     // vendor choice (or deliberate lack of one) is preserved.
     let spec = if resolved_flag {
-        match resolve(spec).as_deref().and_then(jdk_version) {
+        match resolve(spec).as_deref().and_then(version_of) {
             Some(v) => match parse_spec(spec).0 {
                 Some(vendor) => format!("{vendor}@{v}"),
                 None => v,
@@ -590,14 +590,14 @@ pub fn cmd_current(rest: &[String]) {
     if rest.iter().any(|a| a == "--json") {
         println!(
             "{{\"version\": {}, \"vendor\": {}, \"home\": {}, \"source\": {}}}",
-            jdk_version(&r.home).as_deref().map_or("null".to_string(), json_str),
+            version_of(&r.home).as_deref().map_or("null".to_string(), json_str),
             vendor_of(&r.home).map_or("null".to_string(), json_str),
             json_str(&r.home.display().to_string()),
             json_str(&r.source)
         );
         return;
     }
-    let v = jdk_version(&r.home).unwrap_or_else(|| "unknown".into());
+    let v = version_of(&r.home).unwrap_or_else(|| "unknown".into());
     let vendor = vendor_of(&r.home).map(|s| format!(" ({s})")).unwrap_or_default();
     println!("{}{} {}", bold(&v), cyan(&vendor), dim(&format!("(from {})", r.source)));
     println!("{}", r.home.display());

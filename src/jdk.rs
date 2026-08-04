@@ -91,6 +91,39 @@ pub fn jdk_version(home: &Path) -> Option<String> {
     None
 }
 
+/// Full version of an installed JDK: the release file when there is one, else
+/// the enclosing install directory's name (stepping out of a macOS
+/// `<name>.jdk/Contents/Home` bundle first). Builds that ship no release file
+/// — Corretto 8 — must not surface as "unknown".
+pub fn version_of(home: &Path) -> Option<String> {
+    if let Some(v) = jdk_version(home) {
+        return Some(v);
+    }
+    let mut dir = home;
+    if dir.file_name()? == "Home" {
+        dir = dir.parent()?;
+    }
+    if dir.file_name()? == "Contents" {
+        dir = dir.parent()?;
+    }
+    version_from_name(dir)
+}
+
+/// Version straight from the JVM's own `java -version` banner:
+///   openjdk version "1.8.0_462"   ->  1.8.0_462
+/// The authoritative fallback when a build ships no release file (Corretto 8
+/// on macOS ships none at all) — better than guessing from the archive's
+/// directory name, which for those builds carries only the major.
+pub fn version_from_java_output(text: &str) -> Option<String> {
+    let (_, rest) = text.split_once("version \"")?;
+    let v = rest.split('"').next()?.trim();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.to_string())
+    }
+}
+
 /// Version guess from an install-dir name ("8.0.392-tem" -> "8.0.392",
 /// "java-1.8.0-openjdk-amd64" -> "1.8.0", "jdk1.8.0_392" -> "1.8.0_392").
 /// Fallback for JDKs that ship no release file — notably many JDK 8 builds.
@@ -437,6 +470,34 @@ mod tests {
         for v in INSTALLABLE_VENDORS {
             assert!(KNOWN_VENDORS.contains(&v), "{v} installable but not known");
         }
+    }
+
+    /// Corretto 8 on macOS ships NO release file at all: the install path has
+    /// to learn the version from `java -version`, and every display path has
+    /// to fall back to the install dir's name instead of saying "unknown".
+    #[test]
+    fn release_less_jdk_still_has_a_version() {
+        assert_eq!(
+            version_from_java_output(
+                "openjdk version \"1.8.0_462\"\nOpenJDK Runtime Environment Corretto-8.462.08.1 (build 1.8.0_462-b08)\n"
+            ),
+            Some("1.8.0_462".to_string())
+        );
+        assert_eq!(version_from_java_output("java version \"21.0.4\" 2024-07-16 LTS"), Some("21.0.4".into()));
+        assert_eq!(version_from_java_output("no banner here"), None);
+
+        // no release file anywhere: fall back to the enclosing install dir,
+        // through a macOS <name>.jdk/Contents/Home bundle
+        let root = std::env::temp_dir().join(format!("jolta-unit-{}-relless", std::process::id()));
+        let home = root.join("corretto-1.8.0_502/Contents/Home");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&home).unwrap();
+        assert_eq!(jdk_version(&home), None);
+        assert_eq!(version_of(&home), Some("1.8.0_502".to_string()));
+        // a plain (non-bundle) layout works the same way
+        let flat = root.join("corretto-1.8.0_502");
+        assert_eq!(version_of(&flat), Some("1.8.0_502".to_string()));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
