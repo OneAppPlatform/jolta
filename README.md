@@ -118,7 +118,12 @@ release tags, Oracle/GraalVM from their archives, Zulu via the Azul API).
 
 Migrating from SDKMAN? Jolta also honors **`.sdkmanrc`** (`java=21.0.2-tem`) with
 vendor mapping (`-tem`, `-amzn`, `-zulu`, `-graal`, `-oracle`), whenever no
-`.java-version` claims the directory.
+`.java-version` claims the directory. Both tools then share one copy of each JDK:
+an `.sdkmanrc` pin resolves to SDKMAN's own install when it has one, even where
+the identifier doesn't spell the version the JDK reports — Corretto's
+`21.0.5.11.1-amzn` (whose `release` file says `21.0.5`) or a JDK 8 `8.0.432-tem`
+(which says `1.8.0_432`). Jolta downloads only what SDKMAN doesn't already have,
+and reads `$SDKMAN_DIR` / `$SDKMAN_CANDIDATES_DIR` if you've moved them.
 
 ## Distros
 

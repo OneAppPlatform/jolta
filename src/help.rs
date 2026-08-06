@@ -101,7 +101,8 @@ pub const PAGES: &[HelpPage] = &[
              release.",
             "Commit .java-version so teammates and CI resolve the same JDK. An \
              existing SDKMAN .sdkmanrc is honored when no .java-version claims the \
-             directory.",
+             directory, and resolves to the JDK sdkman already installed rather \
+             than downloading a second copy of it.",
         ],
         examples: &[
             ("jolta pin 21", "any installed 21.x"),
@@ -388,10 +389,11 @@ pub const PAGES: &[HelpPage] = &[
         aliases: &[],
         about: &[
             "Prints hook code for your shell (default: the one you're running). \
-             The hook re-exports JAVA_HOME when you cd, when the pin file changes \
-             under you (a git checkout or an edit — no cd needed), and when an \
-             install, upgrade, or default from another shell changes what resolves. \
-             Each prompt costs a builtin file read; jolta runs only on a real change.",
+             The hook re-checks before every prompt, so JAVA_HOME follows the pin \
+             that applies — after a cd, after a git checkout or an edit rewrites \
+             the pin file under a shell that never moved, and after an install, \
+             upgrade, or default run from another shell. Each prompt costs a \
+             builtin file read; jolta runs only on a real change.",
             "'jolta setup' adds the eval line to your profile automatically — you \
              only need this command for custom profiles or other shells.",
         ],

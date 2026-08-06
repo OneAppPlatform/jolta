@@ -39,7 +39,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
   "url": "https://oneappplatform.github.io/jolta/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "softwareVersion": "0.8.2",
+  "softwareVersion": "0.8.3",
   "license": "https://opensource.org/license/mit",
   "downloadUrl": "https://github.com/OneAppPlatform/jolta/releases",
   "sameAs": "https://github.com/OneAppPlatform/jolta",
@@ -479,7 +479,11 @@ LTS (Temurin) and sets it as your default.</p>
 An exact pin (<code>21.0.2</code>) means exact — never silently substituted, and
 auto-installed precisely. <code>.sdkmanrc</code> files (<code>java=21.0.2-tem</code>)
 are honored with vendor mapping when no <code>.java-version</code> claims the
-directory. <code>jolta catalog</code> (alias <code>search</code>) shows what every distro
+directory, and resolve to SDKMAN's own install when it has one — including
+identifiers that don't spell the version the JDK reports, like Corretto's
+<code>21.0.5.11.1-amzn</code> (<code>release</code> says <code>21.0.5</code>) or a
+JDK&nbsp;8 <code>8.0.432-tem</code> (<code>1.8.0_432</code>). Neither tool ends up
+with a duplicate copy. <code>jolta catalog</code> (alias <code>search</code>) shows what every distro
 publishes — latest per distro, per-major comparisons, and <code>@v</code> prefix
 filters like <code>temurin@21.0</code> — with installed versions marked.</p>
 
@@ -533,7 +537,8 @@ instead of downloading their own JDKs behind your back.</p>
 (<code>$JOLTA_HOME/jdks</code>); macOS's <code>/usr/libexec/java_home&nbsp;-V</code>
 (which covers <code>/Library/Java/JavaVirtualMachines</code>, Homebrew casks, and
 IntelliJ-downloaded JDKs); <code>/usr/lib/jvm</code>; SDKMAN's
-<code>~/.sdkman/candidates/java</code> (vendor read from the directory suffix,
+<code>~/.sdkman/candidates/java</code> — or wherever <code>$SDKMAN_DIR</code> /
+<code>$SDKMAN_CANDIDATES_DIR</code> point (vendor read from the directory suffix,
 <code>Contents/Home</code> bundles handled, JDK&nbsp;8-era installs without a
 <code>release</code> file identified by directory name); Windows vendor directories
 under <code>Program Files</code>; and <code>JAVA_HOME_&lt;major&gt;_&lt;arch&gt;</code>

@@ -131,12 +131,14 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
     Some(home)
 }
 
-/// "java=21.0.2-tem" -> "temurin@21.0.2". Unknown/absent suffixes become
-/// vendorless specs (best matching installed distro).
-/// Parsing matches sdkman's own normalisation: strip from the first '#' to
-/// end of line, then delete ALL whitespace — so "java = 21.0.2-tem # ci"
+/// "java=21.0.2-tem" -> ("temurin@21.0.2", "21.0.2-tem"): the jolta spec, plus
+/// the raw sdkman identifier, which names sdkman's own install directory
+/// exactly and so resolves builds whose version the ID spells differently.
+/// Unknown/absent suffixes become vendorless specs (best matching installed
+/// distro). Parsing matches sdkman's own normalisation: strip from the first
+/// '#' to end of line, then delete ALL whitespace — so "java = 21.0.2-tem # ci"
 /// is legal there and must be here too (CRLF falls out for free).
-fn parse_sdkmanrc(text: &str) -> Option<String> {
+fn parse_sdkmanrc(text: &str) -> Option<(String, String)> {
     for line in text.trim_start_matches('\u{feff}').lines() {
         let line: String = line
             .split('#')
@@ -154,12 +156,13 @@ fn parse_sdkmanrc(text: &str) -> Option<String> {
             None => (value, ""),
         };
         let vendor = crate::jdk::sdkman_suffix_vendor(suffix);
-        return Some(if vendor.is_empty() {
+        let spec = if vendor.is_empty() {
             // unknown distro suffix: match on version across any distro
             version.to_string()
         } else {
             format!("{vendor}@{version}")
-        });
+        };
+        return Some((spec, value.to_string()));
     }
     None
 }
@@ -167,6 +170,10 @@ fn parse_sdkmanrc(text: &str) -> Option<String> {
 pub struct Pin {
     pub spec: Option<String>,
     pub source: String,
+    /// The raw sdkman identifier when the pin came from `.sdkmanrc`, so
+    /// resolution can fall back to sdkman's own install directory instead of
+    /// downloading a JDK that is already on the machine.
+    pub sdkman_id: Option<String>,
 }
 
 fn pin_key(path: &str) -> String {
@@ -209,7 +216,7 @@ pub fn remembered_pin_specs() -> Vec<(String, String)> {
         };
         let spec = fs::read_to_string(&path).ok().and_then(|text| {
             if path.ends_with(".sdkmanrc") {
-                parse_sdkmanrc(&text)
+                parse_sdkmanrc(&text).map(|(spec, _)| spec)
             } else {
                 first_spec_line(&text)
             }
@@ -265,6 +272,7 @@ pub fn read_pin() -> Pin {
                     return Pin {
                         spec: Some(spec),
                         source: f.display().to_string(),
+                        sdkman_id: None,
                     };
                 }
             }
@@ -274,10 +282,11 @@ pub fn read_pin() -> Pin {
         let f = dir.join(".sdkmanrc");
         if f.is_file() {
             if let Ok(text) = fs::read_to_string(&f) {
-                if let Some(spec) = parse_sdkmanrc(&text) {
+                if let Some((spec, id)) = parse_sdkmanrc(&text) {
                     return Pin {
                         spec: Some(spec),
                         source: f.display().to_string(),
+                        sdkman_id: Some(id),
                     };
                 }
             }
@@ -292,12 +301,14 @@ pub fn read_pin() -> Pin {
             return Pin {
                 spec: Some(spec),
                 source: format!("jolta default ({})", default.display()),
+                sdkman_id: None,
             };
         }
     }
     Pin {
         spec: None,
         source: "system default (no .java-version found, no jolta default set)".into(),
+        sdkman_id: None,
     }
 }
 
@@ -350,6 +361,16 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
     match pin.spec {
         Some(spec) => {
             let mut home = resolve(&spec);
+            // An sdkman ID does not always spell the version the JDK reports —
+            // Corretto's "21.0.5.11.1-amzn" against a release file that says
+            // 21.0.5 — so a version-based match can miss a JDK sdkman already
+            // installed. Its install directory is named after the ID, which is
+            // exact. Tried only after normal resolution, so a jolta-managed JDK
+            // still wins when it satisfies the pin, and always before
+            // downloading a second copy of a JDK that is already here.
+            if home.is_none() {
+                home = pin.sdkman_id.as_deref().and_then(crate::jdk::sdkman_candidate);
+            }
             if home.is_none() && auto_install && try_auto_install(&spec) {
                 home = resolve(&spec);
             }
@@ -436,7 +457,7 @@ mod tests {
         ] {
             assert_eq!(
                 parse_sdkmanrc(&format!("java=21.0.4-{suffix}\n")),
-                Some(format!("{vendor}@21.0.4")),
+                Some((format!("{vendor}@21.0.4"), format!("21.0.4-{suffix}"))),
                 "suffix -{suffix}"
             );
         }
@@ -444,7 +465,20 @@ mod tests {
 
     #[test]
     fn sdkmanrc_unknown_suffix_is_vendorless() {
-        assert_eq!(parse_sdkmanrc("java=21.0.4-wibble\n"), Some("21.0.4".into()));
+        assert_eq!(
+            parse_sdkmanrc("java=21.0.4-wibble\n"),
+            Some(("21.0.4".into(), "21.0.4-wibble".into()))
+        );
+    }
+
+    /// The raw ID survives sdkman's whitespace/comment normalisation — it has
+    /// to name the install directory byte for byte to be usable as a lookup.
+    #[test]
+    fn sdkmanrc_keeps_raw_identifier() {
+        assert_eq!(
+            parse_sdkmanrc("java = 21.0.5.11.1-amzn # ci\r\n"),
+            Some(("corretto@21.0.5.11.1".into(), "21.0.5.11.1-amzn".into()))
+        );
     }
 }
 

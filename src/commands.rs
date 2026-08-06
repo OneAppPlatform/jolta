@@ -451,7 +451,7 @@ fn stale_java_home_hint(resolved: Option<&Path>) {
         if resolved != Some(Path::new(&jh)) {
             println!(
                 "{}",
-                dim("note: this shell's JAVA_HOME predates the change — cd anywhere (or open a new shell) to let the hook refresh it")
+                dim("note: this shell's JAVA_HOME predates the change — the shell hook refreshes it at the next prompt")
             );
         }
     }

@@ -50,6 +50,31 @@ pub fn is_exact(version: &str) -> bool {
     !version.starts_with("1.") && version.contains('.')
 }
 
+/// One dotted form for the three ways a legacy JDK 8 build gets spelled:
+/// "1.8.0_392" (what the release file says), "8u392" (Oracle's downloads) and
+/// "8.0.392" (sdkman IDs, Adoptium) are the same build and must compare equal.
+/// Until they did, an `.sdkmanrc` pin of "java=8.0.392-tem" could never match
+/// the JDK sdkman had installed, and jolta downloaded a second copy.
+fn canon_version(version: &str) -> String {
+    let v = version.split(['+', '-']).next().unwrap_or("");
+    // "8u392" -> "8.0.392": the update number is the third component
+    if let Some((major, update)) = v.split_once('u') {
+        if !major.is_empty()
+            && !update.is_empty()
+            && major.bytes().all(|b| b.is_ascii_digit())
+            && update.bytes().all(|b| b.is_ascii_digit())
+        {
+            return format!("{major}.0.{update}");
+        }
+    }
+    let v = v.replace('_', ".");
+    // "1.8.0.392" -> "8.0.392": the leading 1 carries no version information
+    match v.strip_prefix("1.") {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => rest.to_string(),
+        _ => v,
+    }
+}
+
 /// Sortable key from up to four dotted components ("21.0.4+7", corretto's
 /// five-part "21.0.2.13.1" — where only the 4th distinguishes point builds).
 /// Legacy update numbers ("1.8.0_392", "8u392") count as components — they
@@ -57,7 +82,7 @@ pub fn is_exact(version: &str) -> bool {
 /// would make every 8 build compare equal and upgrades no-op (mise #839).
 /// Build metadata (+13) and prerelease tags (-ea) are insignificant.
 pub fn numkey(version: &str) -> u64 {
-    let v = version.split(['+', '-']).next().unwrap_or("").replace(['u', '_'], ".");
+    let v = canon_version(version);
     let mut parts = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0).min(999));
     let a = parts.next().unwrap_or(0);
     let b = parts.next().unwrap_or(0);
@@ -174,6 +199,39 @@ pub fn sdkman_suffix_vendor(suffix: &str) -> &'static str {
         "albba" => "dragonwell",
         _ => "",
     }
+}
+
+/// Where sdkman keeps its java candidates, honoring the same overrides sdkman
+/// itself reads: $SDKMAN_CANDIDATES_DIR, else $SDKMAN_DIR, else ~/.sdkman.
+/// None in HOME-less environments (cron, containers) — shims must keep working
+/// there, so a missing HOME is never fatal.
+pub fn sdkman_java_dir() -> Option<PathBuf> {
+    if let Some(c) = std::env::var("SDKMAN_CANDIDATES_DIR").ok().filter(|s| !s.is_empty()) {
+        return Some(PathBuf::from(c).join("java"));
+    }
+    let root = match std::env::var("SDKMAN_DIR").ok().filter(|s| !s.is_empty()) {
+        Some(d) => PathBuf::from(d),
+        None => {
+            let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()?;
+            PathBuf::from(home).join(".sdkman")
+        }
+    };
+    Some(root.join("candidates").join("java"))
+}
+
+/// The JDK sdkman itself would use for a literal candidate ID from `.sdkmanrc`
+/// ("21.0.5.11.1-amzn"). sdkman names every install directory after the exact
+/// ID it publishes, so this matches where comparing versions cannot: Corretto
+/// IDs carry two components its release file never reports (21.0.5.11.1 vs
+/// JAVA_VERSION "21.0.5"). None unless the directory holds a runnable java.
+pub fn sdkman_candidate(id: &str) -> Option<PathBuf> {
+    // an ID comes from a file in the tree; it must never escape the candidates
+    // directory ("../../etc") or name the `current` symlink
+    if id.is_empty() || id.starts_with('.') || id.contains("..") || id.contains(['/', '\\']) {
+        return None;
+    }
+    let home = managed_home(&sdkman_java_dir()?.join(id));
+    has_java(&home).then_some(home)
 }
 
 /// Which distro a JDK home is, from its release IMPLEMENTOR or its path.
@@ -319,11 +377,7 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
         }
     }
     let mut bases = vec![PathBuf::from("/usr/lib/jvm")];
-    // The .sdkman scan is best-effort: shims must keep working in HOME-less
-    // environments (cron, containers), so never die over a missing HOME here.
-    if let Ok(h) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-        bases.push(PathBuf::from(h).join(".sdkman/candidates/java"));
-    }
+    bases.extend(sdkman_java_dir());
     // Windows installers drop JDKs under Program Files vendor directories
     for pf_var in ["ProgramFiles", "ProgramFiles(x86)"] {
         if let Ok(pf) = std::env::var(pf_var) {
@@ -469,6 +523,33 @@ mod tests {
     fn every_installable_vendor_is_known() {
         for v in INSTALLABLE_VENDORS {
             assert!(KNOWN_VENDORS.contains(&v), "{v} installable but not known");
+        }
+    }
+
+    /// A JDK 8 build has three spellings and they must all compare equal, or
+    /// an sdkman pin ("8.0.392-tem") never matches the JDK sdkman installed
+    /// (whose release file says "1.8.0_392") and jolta downloads a duplicate.
+    #[test]
+    fn legacy_jdk8_spellings_compare_equal() {
+        let key = numkey("8.0.392");
+        assert_eq!(numkey("1.8.0_392"), key, "release-file spelling");
+        assert_eq!(numkey("8u392"), key, "Oracle download spelling");
+        assert_eq!(numkey("1.8.0_392-b08"), key, "with a build tag");
+        // still ordered, and still distinct from a different update
+        assert!(numkey("1.8.0_402") > numkey("8.0.392"));
+        assert!(numkey("8.0.402") > numkey("1.8.0_392"));
+        assert_ne!(numkey("1.8.0_392"), numkey("8.0.402"));
+        // majors are untouched: "1.8" is major 8, not an exact build
+        assert_eq!(major_of("1.8.0_392"), Some(8));
+        assert!(numkey("21.0.2") > numkey("8.0.392"));
+    }
+
+    /// The candidate lookup takes an ID straight from a file in the project
+    /// tree, so it must not be able to name anything outside the java dir.
+    #[test]
+    fn sdkman_candidate_rejects_traversal() {
+        for id in ["", ".", "..", "../../etc", "21.0.4-tem/../..", "a\\b", ".hidden"] {
+            assert_eq!(sdkman_candidate(id), None, "id {id:?} must not resolve");
         }
     }
 

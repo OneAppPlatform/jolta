@@ -307,6 +307,51 @@ printf 'java=96.0.1-amzn\n' > sub/.sdkmanrc
 cd "$work/c2/sub"
 check "child .sdkmanrc beats parent .java-version" "corretto-96.0.1" "$(jolta home 2>/dev/null)"
 
+# --- reusing sdkman's own JDKs rather than downloading a second copy --------
+# sdkman names each install directory after the exact ID it publishes, and that
+# ID does not always spell the version the JDK reports. Both mismatching
+# spellings below used to miss and trigger a duplicate download.
+sdk="$work/sdkman"
+mkdir -p "$sdk/candidates/java"
+# Corretto: the ID carries two components the release file never reports
+mk_jdk "$sdk/candidates/java/91.0.5.11.1-amzn" 91.0.5 "Amazon.com Inc."
+# JDK 8-style: the ID says "90.0.432", the release file says "1.90.0_432"
+mk_jdk "$sdk/candidates/java/90.0.432-tem"     1.90.0_432 "Eclipse Adoptium"
+# a plain ID whose version matches, to prove the ordinary path still works
+mk_jdk "$sdk/candidates/java/89.0.1-tem"       89.0.1 "Eclipse Adoptium"
+
+mkdir -p "$work/c3" && cd "$work/c3"
+SDKMAN_DIR="$sdk"; export SDKMAN_DIR
+
+printf 'java=89.0.1-tem\n' > .sdkmanrc
+check "sdkman JDK reused (matching version)" \
+  "$sdk/candidates/java/89.0.1-tem" "$(jolta home 2>/dev/null)"
+
+printf 'java=91.0.5.11.1-amzn\n' > .sdkmanrc
+check "corretto 5-part sdkman ID reuses sdkman's JDK" \
+  "$sdk/candidates/java/91.0.5.11.1-amzn" "$(jolta home 2>/dev/null)"
+
+printf 'java=90.0.432-tem\n' > .sdkmanrc
+check "legacy JDK 8-style sdkman ID reuses sdkman's JDK" \
+  "$sdk/candidates/java/90.0.432-tem" "$(jolta home 2>/dev/null)"
+
+# the ID is read from a file in the tree: it must not name anything outside
+# the candidates dir, and a genuinely absent JDK must still fail loudly
+printf 'java=../../../etc-amzn\n' > .sdkmanrc
+jolta_rc jolta home
+check_rc "sdkman ID cannot traverse out of the candidates dir" nonzero "$rc"
+printf 'java=88.0.1-tem\n' > .sdkmanrc
+jolta_rc jolta home
+check_rc "sdkman ID with no matching install still fails" nonzero "$rc"
+
+# a jolta-managed JDK that satisfies the pin still wins over sdkman's copy
+printf 'java=97.0.1-tem\n' > .sdkmanrc
+check "managed JDK still beats sdkman's copy" "$JOLTA_HOME/jdks/temurin-97.0.1" \
+  "$(jolta home 2>/dev/null)"
+
+unset SDKMAN_DIR
+cd "$work"
+
 # =================================================================
 section "D. shim fidelity (volta-inspired)"
 # =================================================================
