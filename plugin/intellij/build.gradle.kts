@@ -46,9 +46,16 @@ intellijPlatform {
     // this is effectively required for anything published. Credentials come
     // from the environment and are never committed; when they're absent the
     // tasks simply don't run, so local builds are unaffected.
+    // Paths, not contents: key material stays on disk instead of in the
+    // environment (where it shows up in process listings), and the verify task
+    // only accepts a file anyway.
     signing {
-        certificateChain = providers.environmentVariable("JB_CERTIFICATE_CHAIN")
-        privateKey = providers.environmentVariable("JB_PRIVATE_KEY")
+        certificateChainFile = layout.file(
+            providers.environmentVariable("JB_CERTIFICATE_CHAIN_FILE").map { file(it) },
+        )
+        privateKeyFile = layout.file(
+            providers.environmentVariable("JB_PRIVATE_KEY_FILE").map { file(it) },
+        )
         password = providers.environmentVariable("JB_PRIVATE_KEY_PASSWORD")
     }
 
@@ -69,6 +76,11 @@ intellijPlatform {
         }
     }
 }
+
+// The IntelliJ Platform plugin (2.2.1) doesn't wire these together, so running
+// both in one invocation fails Gradle's input validation: verification reads
+// the archive signing produces.
+tasks.named("verifyPluginSignature") { dependsOn(tasks.named("signPlugin")) }
 
 // Platform tests drive the IDE's own component container; they need the
 // module system opened up and won't run headless without this.
