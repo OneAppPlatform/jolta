@@ -128,6 +128,10 @@ object JoltaInstaller {
         object : Task.Backgroundable(project, "Jolta: waiting for the install to finish", true) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.isIndeterminate = true
+                // Name the path being watched. If the install lands somewhere
+                // else — a different JOLTA_HOME in the shell that ran it — this
+                // otherwise looks like a hang with nothing to go on.
+                indicator.text = "Watching for ${expectedBinaryPath()}"
                 val deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(5)
                 while (System.nanoTime() < deadline) {
                     if (indicator.isCanceled || project.isDisposed) return
@@ -137,9 +141,22 @@ object JoltaInstaller {
                     }
                     Thread.sleep(1000)
                 }
+                // The commonest cause of landing here: the install ran in a
+                // shell with a different JOLTA_HOME, so it's on disk but not
+                // where this IDE looks. Say so, rather than just "not found".
+                val elsewhere = File(File(System.getProperty("user.home"), ".jolta"), "bin")
+                    .resolve(if (windows) "jolta.exe" else "jolta")
+                val hint = if (Jolta.homeOverride == null && System.getenv("JOLTA_HOME") != null &&
+                    elsewhere.canExecute()
+                ) {
+                    " There is one at $elsewhere, but this IDE is using JOLTA_HOME=" +
+                        "${System.getenv("JOLTA_HOME")}."
+                } else {
+                    ""
+                }
                 JoltaNotifications.notify(
                     project,
-                    "Still no jolta at ${Jolta.joltaHome()}/bin. If the install finished, use " +
+                    "Still no jolta at ${expectedBinaryPath()}.$hint If the install finished, use " +
                         "Tools → Jolta → Reload JDK.",
                     NotificationType.WARNING,
                 )

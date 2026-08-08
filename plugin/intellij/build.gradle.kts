@@ -42,6 +42,24 @@ intellijPlatform {
             untilBuild = provider { null }
         }
     }
+    // Marketplace signing. Unsigned plugins install with a warning dialog, so
+    // this is effectively required for anything published. Credentials come
+    // from the environment and are never committed; when they're absent the
+    // tasks simply don't run, so local builds are unaffected.
+    signing {
+        certificateChain = providers.environmentVariable("JB_CERTIFICATE_CHAIN")
+        privateKey = providers.environmentVariable("JB_PRIVATE_KEY")
+        password = providers.environmentVariable("JB_PRIVATE_KEY_PASSWORD")
+    }
+
+    publishing {
+        token = providers.environmentVariable("JB_PUBLISH_TOKEN")
+        // Anything with a pre-release suffix goes to a side channel rather than
+        // to everyone on stable.
+        channels = providers.gradleProperty("pluginVersion").orElse(project.version.toString())
+            .map { v -> listOf(v.substringAfter('-', "default").substringBefore('.')) }
+    }
+
     pluginVerification {
         ides {
             // sinceBuild floor and a current release: the API drift that

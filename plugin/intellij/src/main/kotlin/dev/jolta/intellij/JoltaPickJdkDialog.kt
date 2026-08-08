@@ -92,8 +92,8 @@ class JoltaPickJdkDialog(
                 checkBox("Pin the exact point release")
                     .bindSelected(request::exact)
                     .comment(
-                        "Writes the resolved build (21.0.11) instead of the major (21), so CI and " +
-                            "teammates can't drift onto a different patch.",
+                        "Writes the exact build you have (for example 21.0.11) instead of just the " +
+                            "major (21), so CI and teammates can't drift onto a different patch.",
                     )
             }
         }
