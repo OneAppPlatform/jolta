@@ -46,7 +46,7 @@ if [ -n "$target" ]; then
   if curl -fsSL -o "$tmp/$asset" "$url" 2>/dev/null; then
     echo "jolta installer: using prebuilt binary ($target)"
     tar -xzf "$tmp/$asset" -C "$tmp"
-    "$tmp/jolta" setup
+    JOLTA_NO_BANNER=1 "$tmp/jolta" setup
     echo "jolta installer: done — open a new shell and run 'jolta doctor'"
     exit 0
   fi
@@ -68,5 +68,5 @@ mkdir -p "$tmp/src"
 tar -xzf "$tmp/jolta-src.tar.gz" -C "$tmp/src" --strip-components=1
 echo "jolta installer: building (release)"
 cargo build --release --quiet --manifest-path "$tmp/src/Cargo.toml"
-"$tmp/src/target/release/jolta" setup
+JOLTA_NO_BANNER=1 "$tmp/src/target/release/jolta" setup
 echo "jolta installer: done — open a new shell and run 'jolta doctor'"

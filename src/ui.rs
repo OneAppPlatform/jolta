@@ -54,6 +54,15 @@ pub fn banner() {
     for (line, shade) in ART.iter().zip(SHADES) {
         println!("{}", paint(&format!("38;5;{shade}"), line, false));
     }
+    version_line();
+}
+
+/// Just the version the banner ends with.
+///
+/// The installer prints its own banner before it has a binary to ask, so
+/// `setup` would otherwise draw a second one right underneath. This keeps the
+/// part that actually carries information — which version just landed.
+pub fn version_line() {
     // version straight from Cargo.toml at compile time — nothing to keep in sync
     let v = concat!("v", env!("CARGO_PKG_VERSION"));
     // pad BEFORE painting: ANSI escapes would break the right-alignment

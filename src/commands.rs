@@ -194,7 +194,13 @@ fn brew_opt_path(me: &Path) -> Option<PathBuf> {
 }
 
 pub fn cmd_setup() {
-    crate::ui::banner();
+    // The installer draws the banner before it has a binary to run, so it asks
+    // us not to draw a second one directly beneath it.
+    if env::var_os("JOLTA_NO_BANNER").is_some() {
+        crate::ui::version_line();
+    } else {
+        crate::ui::banner();
+    }
     let home = jolta_home();
     for sub in ["bin", "jdks", "cache", "shims"] {
         let _ = fs::create_dir_all(home.join(sub));
