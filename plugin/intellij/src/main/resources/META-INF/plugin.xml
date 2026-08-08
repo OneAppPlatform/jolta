@@ -20,13 +20,16 @@
         <ul>
             <li><b>Nothing to configure.</b> Open a pinned project and the Project SDK, the Gradle JVM,
                 and the Maven importer JDK are already right.</li>
+            <li><b><code>JAVA_HOME</code> agrees with the IDE.</b> Java run configurations get
+                <code>JAVA_HOME</code> and <code>PATH</code> pointed at the pinned JDK, so a test that
+                shells out to Gradle, Maven or a build script uses the same JDK the editor compiles
+                with. The IDE's built-in terminal gets it too, from jolta's shell hook — no more
+                <code>java -version</code> disagreeing with your Project SDK.</li>
             <li><b>Set the version from the IDE.</b> Pick a JDK from the status bar or
                 <i>Tools → Jolta</i> and the pin is written for you — so your teammates, your terminal,
                 and CI land on the same JDK. Don't have it? It downloads.</li>
             <li><b>Live.</b> Run <code>jolta pin 25</code> in any terminal, or pull a teammate's commit,
                 and the IDE follows within seconds. No restart, no re-import.</li>
-            <li><b>Run configurations too.</b> <code>JAVA_HOME</code> and <code>PATH</code> point at the
-                pinned JDK, so anything your tests shell out to agrees with the IDE.</li>
             <li><b>SDK entries that don't rot.</b> <code>jolta upgrade</code> moves a JDK and the SDK
                 entry is repointed — never left dangling for you to clean up by hand.</li>
             <li><b>It stays out of unpinned projects.</b> No pin and no jolta default means the plugin

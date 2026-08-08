@@ -16,6 +16,7 @@ import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.components.JBScrollPane
 import javax.swing.DefaultListModel
 import javax.swing.JComponent
+import javax.swing.JList
 import javax.swing.ListSelectionModel
 
 /**
@@ -103,9 +104,20 @@ class JoltaPickJdkDialog(
     private fun configureList() {
         list.selectionMode = ListSelectionModel.SINGLE_SELECTION
         list.visibleRowCount = 8
-        list.cellRenderer = SimpleListCellRenderer.create { label, jdk, _ ->
-            label.text = "Java ${jdk.version}  ·  ${jdk.vendor}"
-            label.toolTipText = jdk.home
+        // Subclassed rather than SimpleListCellRenderer.create(...), which is
+        // scheduled for removal as of 2026.2. customize() is the stable API and
+        // exists all the way back to our sinceBuild.
+        list.cellRenderer = object : SimpleListCellRenderer<JoltaJdk>() {
+            override fun customize(
+                list: JList<out JoltaJdk>,
+                value: JoltaJdk?,
+                index: Int,
+                selected: Boolean,
+                hasFocus: Boolean,
+            ) {
+                text = value?.let { "Java ${it.version}  ·  ${it.vendor}" }.orEmpty()
+                toolTipText = value?.home
+            }
         }
         list.emptyText.text = "No JDKs installed yet"
         list.emptyText.appendSecondaryText(

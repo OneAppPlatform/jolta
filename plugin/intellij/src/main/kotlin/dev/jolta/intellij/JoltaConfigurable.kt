@@ -41,6 +41,16 @@ class JoltaConfigurable(private val project: Project) :
                         )
                 }
                 row {
+                    checkBox("Give modules with their own pin their own JDK")
+                        .bindSelected(state::manageModuleSdks)
+                        .comment(
+                            "A module with its own <code>.java-version</code> gets its own SDK instead of " +
+                                "inheriting the project's — the same nearest-pin-wins rule the terminal uses. " +
+                                "In Gradle and Maven projects the build system owns module SDKs and will " +
+                                "overwrite this on re-import; a toolchain is the durable way to say it there.",
+                        )
+                }
+                row {
                     checkBox("Offer to pin this project when it isn't pinned")
                         .bindSelected(
                             getter = { !state.suppressPinOffer },

@@ -73,6 +73,10 @@ intellijPlatform {
             // breaks plugins shows up at the ends of the supported range
             ide("IC", "2024.2.4")
             ide("IC", "2025.1.4")
+            // A current build too: the Marketplace verifies against the newest
+            // IDE, and deprecations that land after our compile target are
+            // invisible until upload otherwise.
+            ide("IC", "2025.2.3")
         }
     }
 }

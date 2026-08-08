@@ -246,6 +246,30 @@ check "pin beats default" "temurin-97.0.1" "$(jolta home 2>/dev/null)"
 mkdir -p "$work/b3"
 check "sibling pin does not leak" "corretto-96.0.1" "$(cd "$work/b3" && jolta home 2>/dev/null)"
 
+# --- monorepo shape: modules pinned differently from the repo root ----------
+# The nearest pin wins, so each module gets its own JDK and none of them leak
+# into a sibling. This is the layout jolta is most often reached for, and the
+# one an IDE integration has to respect per directory rather than per project.
+mkdir -p "$work/mono/svc-a" "$work/mono/svc-b/src/main/java" "$work/mono/svc-c"
+echo 97 > "$work/mono/.java-version"
+echo 96 > "$work/mono/svc-a/.java-version"
+echo 95 > "$work/mono/svc-b/.java-version"
+check "repo root uses its own pin" "temurin-97.0.1" \
+  "$(cd "$work/mono" && jolta home 2>/dev/null)"
+check "module pin beats the repo root" "corretto-96.0.1" \
+  "$(cd "$work/mono/svc-a" && jolta home 2>/dev/null)"
+check "a second module resolves independently" "1.95.0_10" \
+  "$(cd "$work/mono/svc-b" && jolta home 2>/dev/null)"
+check "deep path inherits its module, not the root" "1.95.0_10" \
+  "$(cd "$work/mono/svc-b/src/main/java" && jolta home 2>/dev/null)"
+check "an unpinned module falls back to the root" "temurin-97.0.1" \
+  "$(cd "$work/mono/svc-c" && jolta home 2>/dev/null)"
+rm "$work/mono/svc-a/.java-version"
+check "removing a module pin falls back to the root" "temurin-97.0.1" \
+  "$(cd "$work/mono/svc-a" && jolta home 2>/dev/null)"
+check "its sibling is unaffected" "1.95.0_10" \
+  "$(cd "$work/mono/svc-b" && jolta home 2>/dev/null)"
+
 ln -s "$work/b2" "$work/b2-link"
 check "pin found through a symlinked cwd" "temurin-97.0.1" \
   "$(cd "$work/b2-link" && jolta home 2>/dev/null)"

@@ -4,6 +4,10 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.module.ModuleManager
+import com.intellij.openapi.roots.ModuleRootManager
+import com.intellij.openapi.roots.ModuleRootModificationUtil
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
@@ -135,7 +139,9 @@ class JoltaSyncService(private val project: Project) : Disposable {
         }
         projectCurrent = current
         resolved[dir.absolutePath] = current
-        applyToIde(current, userInitiated)
+        // Resolved here, on a background thread: one `jolta current` per module
+        // content root, cached. applyToIde runs on the EDT and must not spawn.
+        applyToIde(current, userInitiated, resolveModulePins(current))
     }
 
     /** The last resolved pin, for passive UI. Never blocks. */
@@ -276,9 +282,70 @@ class JoltaSyncService(private val project: Project) : Disposable {
     var divergence: String? = null
         private set
 
-    private fun applyToIde(current: JoltaCurrent, userInitiated: Boolean = false) {
-        val major = Jolta.majorOf(current.version) ?: return
-        val name = "jolta ${current.vendor ?: "jdk"} $major"
+    /** Changing a module's SDK shouldn't be silent, but it doesn't need its own balloon. */
+    private fun modulesSuffix(count: Int): String = when (count) {
+        0 -> ""
+        1 -> " (1 module has its own pin and was set separately)"
+        else -> " ($count modules have their own pins and were set separately)"
+    }
+
+    /** The SDK-table name for a resolved pin. Keyed on the major — see [repairJoltaSdks]. */
+    private fun sdkNameFor(current: JoltaCurrent): String? {
+        val major = Jolta.majorOf(current.version) ?: return null
+        return "jolta ${current.vendor ?: "jdk"} $major"
+    }
+
+    /**
+     * The pin for each module whose own `.java-version` differs from the
+     * project's — "the most specific pin wins" applied at the module boundary,
+     * the same rule the CLI uses when it walks up from a directory.
+     *
+     * Modules that resolve to the same pin as the project are left inheriting
+     * the project SDK rather than being given a redundant module SDK, which
+     * keeps the blast radius to exactly the modules that actually differ.
+     */
+    private fun resolveModulePins(projectPin: JoltaCurrent): JoltaModulePlan.Plan {
+        val state = project.service<JoltaProjectState>()
+        val empty = JoltaModulePlan.Plan(emptyMap(), emptySet())
+        if (!state.manageModuleSdks) {
+            // Turning the setting off should hand back what we already took,
+            // not freeze modules on whatever we last assigned.
+            return JoltaModulePlan.Plan(emptyMap(), state.appliedModuleSdks)
+        }
+        val roots = try {
+            ReadAction.compute<List<Pair<String, File>>, RuntimeException> {
+                if (project.isDisposed) return@compute emptyList()
+                ModuleManager.getInstance(project).modules.mapNotNull { module ->
+                    // First content root: a module with several is almost always
+                    // one source tree plus generated output, and the pin lives
+                    // with the source.
+                    ModuleRootManager.getInstance(module).contentRoots.firstOrNull()
+                        ?.let { module.name to File(it.path) }
+                }
+            }
+        } catch (e: Exception) {
+            log.warn("cannot enumerate modules", e)
+            return empty
+        }
+
+        val resolved = LinkedHashMap<String, JoltaCurrent>()
+        for ((moduleName, root) in roots) {
+            currentFor(root)?.let { resolved[moduleName] = it }
+        }
+        return JoltaModulePlan.compute(
+            projectPin = projectPin,
+            resolvedByModule = resolved,
+            previouslyApplied = state.appliedModuleSdks,
+            knownModules = roots.map { it.first }.toSet(),
+        )
+    }
+
+    private fun applyToIde(
+        current: JoltaCurrent,
+        userInitiated: Boolean = false,
+        modulePlan: JoltaModulePlan.Plan = JoltaModulePlan.Plan(emptyMap(), emptySet()),
+    ) {
+        val name = sdkNameFor(current) ?: return
         val state = project.service<JoltaProjectState>()
 
         ApplicationManager.getApplication().invokeLater {
@@ -295,6 +362,7 @@ class JoltaSyncService(private val project: Project) : Disposable {
 
             var replaced: String? = null
             var changed = false
+            var appliedModules = 0
             ApplicationManager.getApplication().runWriteAction {
                 val sdk = ensureSdk(name, current.home)
                 repairJoltaSdks()
@@ -306,6 +374,7 @@ class JoltaSyncService(private val project: Project) : Disposable {
                     rootManager.projectSdk = sdk
                 }
                 state.recordApplied(sdk.name, JoltaOverride.pinKey(current))
+                appliedModules = applyModuleSdks(modulePlan)
             }
             if (project.service<JoltaProjectState>().manageGradleAndMaven) {
                 GradleApplier.apply(project, name)
@@ -326,9 +395,15 @@ class JoltaSyncService(private val project: Project) : Disposable {
                         undoTo(previousName),
                     )
                 changed ->
-                    notify("Project SDK set to $described — ${current.source ?: "jolta"}", NotificationType.INFORMATION)
+                    notify(
+                        "Project SDK set to $described — ${current.source ?: "jolta"}" + modulesSuffix(appliedModules),
+                        NotificationType.INFORMATION,
+                    )
                 userInitiated ->
-                    notify("Project SDK is already $described — ${current.source ?: "jolta"}", NotificationType.INFORMATION)
+                    notify(
+                        "Project SDK is already $described — ${current.source ?: "jolta"}" + modulesSuffix(appliedModules),
+                        NotificationType.INFORMATION,
+                    )
             }
 
             reportProblems(userInitiated)
@@ -365,6 +440,55 @@ class JoltaSyncService(private val project: Project) : Disposable {
                 },
             )
         }
+    }
+
+    /**
+     * Give each differing module its own SDK. Must be called inside a write
+     * action. Returns how many modules were changed.
+     *
+     * Caveat worth knowing: in Gradle and Maven projects the build system owns
+     * module SDKs and a re-import will overwrite these. The durable way to say
+     * "this module compiles with 17" there is a toolchain
+     * (`java.toolchain.languageVersion`); this makes the IDE agree with the pin
+     * in the meantime, and re-applies on the next sync.
+     */
+    private fun applyModuleSdks(plan: JoltaModulePlan.Plan): Int {
+        if (plan.isEmpty) return 0
+        val moduleManager = ModuleManager.getInstance(project)
+        val state = project.service<JoltaProjectState>()
+        val nowApplied = state.appliedModuleSdks.toMutableSet()
+        var changed = 0
+
+        for ((moduleName, pin) in plan.assign) {
+            val module = moduleManager.findModuleByName(moduleName) ?: continue
+            val name = sdkNameFor(pin) ?: continue
+            val sdk = ensureSdk(name, pin.home)
+            nowApplied += moduleName
+            if (ModuleRootManager.getInstance(module).sdk?.name == sdk.name) continue
+            try {
+                ModuleRootModificationUtil.setModuleSdk(module, sdk)
+                changed++
+                log.info("module '$moduleName' -> ${pin.version} (${pin.source})")
+            } catch (e: Exception) {
+                log.warn("cannot set the SDK for module '$moduleName'", e)
+            }
+        }
+
+        for (moduleName in plan.revert) {
+            val module = moduleManager.findModuleByName(moduleName) ?: continue
+            nowApplied -= moduleName
+            if (ModuleRootManager.getInstance(module).isSdkInherited) continue
+            try {
+                ModuleRootModificationUtil.setSdkInherited(module)
+                changed++
+                log.info("module '$moduleName' handed back to the project SDK")
+            } catch (e: Exception) {
+                log.warn("cannot revert the SDK for module '$moduleName'", e)
+            }
+        }
+
+        state.appliedModuleSdks = nowApplied
+        return changed
     }
 
     /** Restores [sdkName] as the project SDK, if it's still in the table. */

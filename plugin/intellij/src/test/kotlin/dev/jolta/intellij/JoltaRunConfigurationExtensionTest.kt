@@ -140,6 +140,69 @@ class JoltaRunConfigurationExtensionTest : BasePlatformTestCase() {
         assertEquals(File("/repo/services/api"), askedFor)
     }
 
+    /* ---------- E2. nested pins: the monorepo case ---------- */
+    /*
+     * jolta resolves per directory — a module with its own .java-version gets
+     * its own JDK, and the CLI is tested for that in edge.sh section B. The
+     * plugin has to honour the same thing: a run configuration rooted in a
+     * module must get that module's JDK, not the repository root's, or the
+     * terminal and the IDE disagree for exactly the layout jolta is reached
+     * for most often.
+     */
+
+    private val root = JoltaCurrent("21.0.11", "temurin", "/h/temurin-21", "/repo/.java-version")
+    private val svcA = JoltaCurrent("17.0.19", "temurin", "/h/temurin-17", "/repo/svc-a/.java-version")
+    private val svcB = JoltaCurrent("11.0.32", "corretto", "/h/corretto-11", "/repo/svc-b/.java-version")
+
+    /** Nearest-pin-wins, the way the CLI walks up. */
+    private fun monorepo(): (com.intellij.openapi.project.Project, File?) -> JoltaCurrent? = { _, dir ->
+        when {
+            dir == null -> root
+            dir.path.startsWith("/repo/svc-a") -> svcA
+            dir.path.startsWith("/repo/svc-b") -> svcB
+            else -> root
+        }
+    }
+
+    fun `test a module's run configuration gets the module's JDK`() {
+        currentProvider = monorepo()
+        val p = params(workDir = "/repo/svc-a")
+        extension.updateJavaParameters(config(), p, null)
+        assertEquals("/h/temurin-17", p.env["JAVA_HOME"])
+    }
+
+    fun `test a sibling module gets its own JDK, not the first one's`() {
+        currentProvider = monorepo()
+        val a = params(workDir = "/repo/svc-a")
+        val b = params(workDir = "/repo/svc-b")
+        extension.updateJavaParameters(config(), a, null)
+        extension.updateJavaParameters(config(), b, null)
+
+        assertEquals("/h/temurin-17", a.env["JAVA_HOME"])
+        assertEquals("no cross-contamination between modules", "/h/corretto-11", b.env["JAVA_HOME"])
+    }
+
+    fun `test a deep path inside a module inherits that module`() {
+        currentProvider = monorepo()
+        val p = params(workDir = "/repo/svc-b/src/test/java")
+        extension.updateJavaParameters(config(), p, null)
+        assertEquals("/h/corretto-11", p.env["JAVA_HOME"])
+    }
+
+    fun `test an unpinned module falls back to the repository root`() {
+        currentProvider = monorepo()
+        val p = params(workDir = "/repo/svc-unpinned")
+        extension.updateJavaParameters(config(), p, null)
+        assertEquals("/h/temurin-21", p.env["JAVA_HOME"])
+    }
+
+    fun `test PATH follows the module too, not just JAVA_HOME`() {
+        currentProvider = monorepo()
+        val p = params(mapOf("PATH" to "/usr/bin"), workDir = "/repo/svc-b")
+        extension.updateJavaParameters(config(), p, null)
+        assertEquals("${File("/h/corretto-11", "bin")}$sep/usr/bin", p.env["PATH"])
+    }
+
     /* ---------- F. nothing to say (governance) ---------- */
 
     fun `test an ungoverned project gets no injection at all`() {
