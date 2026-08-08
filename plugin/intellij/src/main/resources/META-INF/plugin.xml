@@ -1,27 +1,89 @@
 <idea-plugin>
-    <id>dev.jolta.intellij</id>
-    <name>Jolta</name>
+    <!-- Marketplace rejects an ID containing "intellij" (TemplateWordInPluginId).
+         This is the plugin's permanent identity — safe to change only because
+         nothing has been published under the old one. -->
+    <id>dev.jolta</id>
+    <!-- Marketplace restricts this to letters, digits, spaces and .,+_-/:()#'&[]|
+         — no em dash. -->
+    <name>Jolta: Java Version Manager</name>
     <vendor url="https://oneappplatform.github.io/jolta/">OneAppPlatform</vendor>
 
     <description><![CDATA[
-        Hands-off JDK selection from your project's <code>.java-version</code>, powered by
-        <a href="https://oneappplatform.github.io/jolta/">jolta</a> — like Volta, but for Java.
+        <p><b>The JDK your project asks for, selected for you — in the IDE, the terminal, and CI.</b></p>
+
+        <p>Pin a Java version once with a <code>.java-version</code> file and
+        <a href="https://oneappplatform.github.io/jolta/">jolta</a> keeps everything on it.
+        This plugin makes IntelliJ IDEA one of the things that agrees.</p>
+
         <ul>
-            <li>Sets the project SDK, Gradle JVM, and Maven importer JDK from the jolta pin — nothing to configure.</li>
-            <li>Live: <code>jolta pin 25</code> in any terminal and the IDE switches immediately.</li>
-            <li>Installs the pinned JDK in the background when it's missing.</li>
-            <li>Survives <code>jolta upgrade</code> — SDK entries are repointed, never left dangling.</li>
+            <li><b>Nothing to configure.</b> Open a pinned project and the Project SDK, the Gradle JVM,
+                and the Maven importer JDK are already right.</li>
+            <li><b>Set the version from the IDE.</b> Pick a JDK from the status bar or
+                <i>Tools → Jolta</i> and the pin is written for you — so your teammates, your terminal,
+                and CI land on the same JDK. Don't have it? It downloads.</li>
+            <li><b>Live.</b> Run <code>jolta pin 25</code> in any terminal, or pull a teammate's commit,
+                and the IDE follows within seconds. No restart, no re-import.</li>
+            <li><b>Run configurations too.</b> <code>JAVA_HOME</code> and <code>PATH</code> point at the
+                pinned JDK, so anything your tests shell out to agrees with the IDE.</li>
+            <li><b>SDK entries that don't rot.</b> <code>jolta upgrade</code> moves a JDK and the SDK
+                entry is repointed — never left dangling for you to clean up by hand.</li>
+            <li><b>It stays out of unpinned projects.</b> No pin and no jolta default means the plugin
+                leaves your SDK exactly as you set it.</li>
         </ul>
-        Requires the jolta CLI (<code>brew install OneAppPlatform/tap/jolta</code>).
+
+        <p>Requires the jolta CLI: <code>brew install OneAppPlatform/tap/jolta</code>
+        (or see the <a href="https://oneappplatform.github.io/jolta/">install guide</a>).
+        Free and open source.</p>
     ]]></description>
+
+    <change-notes><![CDATA[
+        <h4>0.2.0</h4>
+        <ul>
+            <li>Set the Java version from the IDE — status bar picker and <i>Tools → Jolta</i>, which
+                writes the pin as well as configuring the IDE.</li>
+            <li>Status bar shows the active Java version, with refresh.</li>
+            <li>Offers to pin unpinned projects to the JDK they are already using.</li>
+            <li><code>JAVA_HOME</code> and <code>PATH</code> injected into Java run configurations.</li>
+            <li>Unpinned projects are left alone entirely.</li>
+            <li>Fixed: a repaired SDK entry could be repointed at an older JDK than it had.</li>
+        </ul>
+    ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
     <depends optional="true" config-file="jolta-gradle.xml">com.intellij.gradle</depends>
     <depends optional="true" config-file="jolta-maven.xml">org.jetbrains.idea.maven</depends>
+    <!-- Only used to run the CLI installer where the user can watch it; the
+         call site falls back to the clipboard when this isn't present. -->
+    <depends optional="true" config-file="jolta-terminal.xml">org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <postStartupActivity implementation="dev.jolta.intellij.JoltaStartup"/>
         <notificationGroup id="Jolta" displayType="BALLOON"/>
+        <runConfigurationExtension implementation="dev.jolta.intellij.JoltaRunConfigurationExtension"/>
+        <statusBarWidgetFactory id="dev.jolta.statusBar"
+                                implementation="dev.jolta.intellij.JoltaStatusBarWidgetFactory"
+                                order="before positionWidget"/>
+        <editorNotificationProvider implementation="dev.jolta.intellij.JoltaPinFileNotificationProvider"/>
+        <projectSdkSetupValidator implementation="dev.jolta.intellij.JoltaSdkSetupValidator"/>
+        <projectConfigurable parentId="tools"
+                            id="dev.jolta.settings"
+                            instance="dev.jolta.intellij.JoltaConfigurable"
+                            displayName="Jolta"/>
     </extensions>
+
+    <actions>
+        <group id="dev.jolta.ToolsGroup" text="Jolta" popup="true"
+               description="Java version for this project, managed by jolta">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="dev.jolta.SetVersion"
+                    class="dev.jolta.intellij.JoltaSetVersionAction"
+                    text="Set Java Version…"
+                    description="Choose a JDK and pin this project to it"/>
+            <action id="dev.jolta.Reload"
+                    class="dev.jolta.intellij.JoltaReloadAction"
+                    text="Reload JDK"
+                    description="Re-resolve this project's jolta pin and reapply it to the IDE"/>
+        </group>
+    </actions>
 </idea-plugin>

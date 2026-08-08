@@ -18,6 +18,20 @@ import org.jetbrains.plugins.gradle.settings.GradleSettings
 object GradleApplier {
     private val log = Logger.getInstance(GradleApplier::class.java)
 
+    /**
+     * The JVM names Gradle is currently configured with, for health checks.
+     * Empty when Gradle isn't in play — which is not a problem to report.
+     */
+    fun currentJvms(project: Project): List<String> =
+        try {
+            GradleSettings.getInstance(project).linkedProjectsSettings.mapNotNull { it.gradleJvm }
+        } catch (e: NoClassDefFoundError) {
+            emptyList()
+        } catch (e: Exception) {
+            log.warn("cannot read Gradle JVM", e)
+            emptyList()
+        }
+
     fun apply(project: Project, sdkName: String) {
         try {
             for (settings in GradleSettings.getInstance(project).linkedProjectsSettings) {
@@ -33,6 +47,18 @@ object GradleApplier {
 
 object MavenApplier {
     private val log = Logger.getInstance(MavenApplier::class.java)
+
+    /** The importer JDK Maven is configured with, or null when Maven isn't in play. */
+    fun currentImporterJdk(project: Project): String? =
+        try {
+            val manager = MavenProjectsManager.getInstance(project)
+            if (manager.isMavenizedProject) manager.importingSettings.jdkForImporter else null
+        } catch (e: NoClassDefFoundError) {
+            null
+        } catch (e: Exception) {
+            log.warn("cannot read Maven importer JDK", e)
+            null
+        }
 
     fun apply(project: Project, sdkName: String) {
         try {
