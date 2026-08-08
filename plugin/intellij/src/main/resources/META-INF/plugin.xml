@@ -1,4 +1,6 @@
-<idea-plugin>
+<!-- url is what the Marketplace links the plugin name to; the issue tracker is
+     named in the description because plugin.xml has no element for it. -->
+<idea-plugin url="https://github.com/OneAppPlatform/jolta">
     <!-- Marketplace rejects an ID containing "intellij" (TemplateWordInPluginId).
          This is the plugin's permanent identity — safe to change only because
          nothing has been published under the old one. -->
@@ -33,19 +35,34 @@
 
         <p>Requires the jolta CLI: <code>brew install OneAppPlatform/tap/jolta</code>
         (or see the <a href="https://oneappplatform.github.io/jolta/">install guide</a>).
-        Free and open source.</p>
+        The plugin offers to install it for you if it isn't there.</p>
+
+        <p><b>Support:</b> free and open source (MIT). Questions, bugs and feature requests go to
+        <a href="https://github.com/OneAppPlatform/jolta/issues/new">the issue tracker</a> —
+        that's the fastest way to reach us, and it means the answer helps the next person too.</p>
     ]]></description>
 
     <change-notes><![CDATA[
-        <h4>0.2.0</h4>
+        <h4>1.0.0</h4>
+        <p>First release.</p>
         <ul>
-            <li>Set the Java version from the IDE — status bar picker and <i>Tools → Jolta</i>, which
-                writes the pin as well as configuring the IDE.</li>
-            <li>Status bar shows the active Java version, with refresh.</li>
-            <li>Offers to pin unpinned projects to the JDK they are already using.</li>
-            <li><code>JAVA_HOME</code> and <code>PATH</code> injected into Java run configurations.</li>
-            <li>Unpinned projects are left alone entirely.</li>
-            <li>Fixed: a repaired SDK entry could be repointed at an older JDK than it had.</li>
+            <li>Opens a pinned project with the Project SDK, Gradle JVM and Maven importer JDK
+                already set — nothing to configure.</li>
+            <li>Set the Java version from the IDE: pick a JDK from the status bar or
+                <i>Tools → Jolta</i> and the <code>.java-version</code> pin is written for you.
+                A version you don't have yet is downloaded.</li>
+            <li>Live: <code>jolta pin 25</code> in any terminal, or a teammate's commit, and the IDE
+                follows within seconds.</li>
+            <li><code>JAVA_HOME</code> and <code>PATH</code> point at the pin for Java run
+                configurations, so anything they shell out to agrees with the IDE.</li>
+            <li>SDK entries are repointed after <code>jolta upgrade</code> instead of being left
+                dangling.</li>
+            <li>Offers to pin an unpinned project to the JDK it is already using, and leaves
+                projects jolta doesn't govern completely alone.</li>
+            <li>Reports genuinely broken configuration — a JDK that has gone from disk, or a
+                <code>.java-version</code> and <code>.sdkmanrc</code> that disagree — and stays quiet
+                about differences that are deliberate, such as a Gradle toolchain.</li>
+            <li>Offers to install the jolta CLI if it isn't there.</li>
         </ul>
     ]]></change-notes>
 
