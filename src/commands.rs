@@ -23,6 +23,15 @@ use crate::ui::{bad_mark, bold, cyan, die, dim, green, ok_mark, paint, warn_mark
 /// ("lts" -> "25", "corretto@lts" -> "corretto@25") using the live release
 /// universe. Non-keyword specs pass through untouched.
 fn expand_spec(spec: &str) -> String {
+    // A dangling separator carries no information: "@21", "-21" and "21@" all
+    // mean 21. Trim it rather than refusing the spec — and, more importantly,
+    // rather than writing "21@" verbatim into a .java-version, which is what
+    // used to happen. Only the ends are trimmed, so "temurin-21" and "21-ea"
+    // keep their interior separators.
+    let trimmed = spec.trim().trim_matches(|c| c == '@' || c == '-').trim();
+    // All separators and nothing else: keep the original so the error names
+    // what the user actually typed.
+    let spec = if trimmed.is_empty() { spec.trim() } else { trimmed };
     let (vendor, version) = parse_spec(spec);
     let major = match version.to_ascii_lowercase().as_str() {
         // offline fallback mirrors the first-run bootstrap: the known train

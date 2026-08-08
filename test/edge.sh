@@ -186,6 +186,30 @@ printf 'v97\n' > .java-version
 jolta_rc jolta home
 check_rc "garbage spec fails" nonzero "$rc"
 
+# --- dangling separators in a written spec ---------------------------------
+# A stray '@' carries no information: "@97" and "97@" both mean 97. These used
+# to be refused ("@97") or, worse, written into .java-version verbatim ("97@"),
+# leaving a pin file that looks broken. `pin` normalizes both ends now; the
+# interior separator of temurin-97 and 97-ea must survive untouched.
+mkdir -p "$work/a-sep" && cd "$work/a-sep"
+jolta pin '@97' >/dev/null 2>&1
+check_eq "pin trims a leading @" "97" "$(cat .java-version 2>/dev/null | tr -d '\n')"
+jolta pin '97@' >/dev/null 2>&1
+check_eq "pin trims a trailing @" "97" "$(cat .java-version 2>/dev/null | tr -d '\n')"
+jolta pin '97-' >/dev/null 2>&1
+check_eq "pin trims a trailing dash" "97" "$(cat .java-version 2>/dev/null | tr -d '\n')"
+jolta pin '@temurin@97' >/dev/null 2>&1
+check_eq "pin trims a leading @ before a vendor" "temurin@97" \
+  "$(cat .java-version 2>/dev/null | tr -d '\n')"
+jolta pin 'temurin-97' >/dev/null 2>&1
+check_eq "an interior dash is left alone" "temurin-97" \
+  "$(cat .java-version 2>/dev/null | tr -d '\n')"
+rm -f .java-version
+jolta_rc jolta pin '@'
+check_rc "a lone separator is still refused" nonzero "$rc"
+check_not "a refused pin writes no file" ".java-version" "$(ls -a 2>/dev/null | grep java-version)"
+cd "$work/a"
+
 # the project pin is authoritative: no env-var override exists (a stray
 # export in a forgotten profile must never silently beat every pin)
 printf '96\n' > .java-version
