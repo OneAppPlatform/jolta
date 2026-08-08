@@ -82,11 +82,19 @@ td.m { color: var(--accent2); }
 .manual-main h3 code { font-size: 1em; }
 .sig { color: var(--muted); font-size: .95rem; margin-top: -8px; }
 .manual-top { border-bottom: 1px solid var(--border); }
-.manual-top .wrap { display: flex; align-items: center; gap: 16px; padding: 10px 20px; }
+/* Mirrors .manual-layout exactly — same max-width, padding, column widths and
+   gap — so the bar sits on the same two columns as the page beneath it: the
+   logo over the sidebar, "Manual" over the body text. The default .wrap is
+   860px, which left the whole bar indented past the menu. */
+.manual-top .wrap { display: grid; grid-template-columns: 240px minmax(0, 1fr);
+  gap: 40px; align-items: center; max-width: 1160px; padding: 10px 20px; }
+.manual-top .bar { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .manual-top img { height: 52px; width: auto; display: block; }
 .manual-top .links { margin-left: auto; display: flex; gap: 18px; font-size: .95rem; }
 @media (max-width: 860px) {
   .manual-layout { grid-template-columns: 1fr; }
+  /* The sidebar column is gone below here, so the bar collapses to a row. */
+  .manual-top .wrap { display: flex; gap: 16px; }
   .sidebar { position: static; max-height: none; columns: 2; padding-bottom: 0; }
   .sidebar .group { break-after: avoid; }
 }
