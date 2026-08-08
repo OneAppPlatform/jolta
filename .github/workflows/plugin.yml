@@ -16,11 +16,29 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
+      # Tests and the descriptor check are cheap and catch the things that
+      # actually break: platform API drift, and a plugin.xml that would be
+      # rejected at upload. Building alone only proves it compiles.
+      - name: Test
+        working-directory: plugin/intellij
+        run: ./gradlew test verifyPluginProjectConfiguration --no-daemon
       - name: Build plugin
         working-directory: plugin/intellij
-        run: ./gradlew buildPlugin --no-daemon
+        run: ./gradlew buildPlugin verifyPluginStructure --no-daemon
+      # The verifier downloads whole IDE distributions, so it runs only where
+      # it earns its keep: on main and on pull requests, not every branch push.
+      - name: Verify against supported IDEs
+        if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+        working-directory: plugin/intellij
+        run: ./gradlew verifyPlugin --no-daemon
       - name: Upload distribution
         uses: actions/upload-artifact@v4
         with:
           name: jolta-intellij
           path: plugin/intellij/build/distributions/*.zip
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-test-report
+          path: plugin/intellij/build/reports/
