@@ -35,6 +35,7 @@ object JoltaInstaller {
 
     const val RELEASES_URL = "https://github.com/OneAppPlatform/jolta/releases"
     const val GUIDE_URL = "https://oneappplatform.github.io/jolta/"
+    const val WINDOWS_GUIDE_URL = "https://oneappplatform.github.io/jolta/#windows"
 
     private val windows = System.getProperty("os.name", "").startsWith("Windows")
 
@@ -48,11 +49,18 @@ object JoltaInstaller {
     /** The notification shown wherever we discover jolta is missing. */
     fun offer(project: Project, reason: String) {
         if (!canInstallHere()) {
+            // Be straight about it: this is a gap on our side, not something
+            // the user did wrong, and there is a fix in flight.
             JoltaNotifications.notify(
                 project,
-                "$reason Download it from the releases page and run `jolta.exe setup`.",
+                "$reason Sorry — Windows needs a manual install for now: download " +
+                    "jolta-x86_64-pc-windows-msvc.zip from the releases page, unzip it, and run " +
+                    "`.\\jolta.exe setup`. It takes about a minute and sets up PATH and JAVA_HOME " +
+                    "for you. A winget package is submitted and awaiting review, after which this " +
+                    "will be a one-liner.",
                 NotificationType.WARNING,
                 NotificationAction.createSimpleExpiring("Open releases page") { browse(RELEASES_URL) },
+                NotificationAction.createSimpleExpiring("Windows setup guide") { browse(WINDOWS_GUIDE_URL) },
             )
             return
         }

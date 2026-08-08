@@ -35,7 +35,15 @@
 
         <p>Requires the jolta CLI: <code>brew install OneAppPlatform/tap/jolta</code>
         (or see the <a href="https://oneappplatform.github.io/jolta/">install guide</a>).
-        The plugin offers to install it for you if it isn't there.</p>
+        On macOS and Linux the plugin offers to install it for you.</p>
+
+        <p><b>Windows:</b> the CLI needs a manual install for now — download
+        <code>jolta-x86_64-pc-windows-msvc.zip</code> from the
+        <a href="https://github.com/OneAppPlatform/jolta/releases">releases page</a>, unzip it, and
+        run <code>.\jolta.exe setup</code>. Setup is first-class on Windows: it adds the shims to
+        your user <code>PATH</code> in the registry and installs the <code>JAVA_HOME</code> hook for
+        PowerShell. Sorry for the extra step — a winget package is submitted and awaiting review,
+        which will make this a one-liner.</p>
 
         <p><b>Support:</b> free and open source (MIT). Questions, bugs and feature requests go to
         <a href="https://github.com/OneAppPlatform/jolta/issues/new">the issue tracker</a> —

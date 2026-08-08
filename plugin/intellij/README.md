@@ -77,6 +77,27 @@ Requires the jolta CLI on the machine (`brew install OneAppPlatform/tap/jolta`);
 the binary is found at `~/.jolta/bin` (or `$JOLTA_HOME/bin`), not via `PATH`,
 so IDEs launched from the Dock work.
 
+### Windows
+
+The CLI needs a manual install for now. The plugin detects this and links
+straight to the download rather than offering a command that won't run:
+
+1. Download `jolta-x86_64-pc-windows-msvc.zip` from the
+   [releases page](https://github.com/OneAppPlatform/jolta/releases)
+2. Unzip it anywhere
+3. Run `.\jolta.exe setup`
+
+Setup is first-class on Windows — it adds the shims and bin directories to your
+user `PATH` in the registry (broadcasting the change so new terminals see it)
+and adds the `JAVA_HOME` hook to your PowerShell profiles. `jolta implode`
+undoes both. Once that's done the plugin behaves exactly as it does elsewhere;
+it looks for `jolta.exe` under `%USERPROFILE%\.jolta\bin`.
+
+Sorry for the extra step. A winget package (`OneAppPlatform.Jolta`) is submitted
+and awaiting review; once it merges this becomes
+`winget install OneAppPlatform.Jolta` and the plugin will offer to run it for
+you, the same as the curl installer on macOS and Linux.
+
 ## Development
 
 ```sh

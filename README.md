@@ -67,7 +67,13 @@ Re-running setup from a newer build upgrades the installed copy.
 
 **Windows:** download `jolta-x86_64-pc-windows-msvc.zip` from the
 [releases page](https://github.com/OneAppPlatform/jolta/releases), unzip, and run
-`.\jolta.exe setup` (or build from source with `cargo build --release`). Setup is
+`.\jolta.exe setup` (or build from source with `cargo build --release`).
+
+> Sorry about the manual step — macOS and Linux get a one-line installer and Windows
+> doesn't yet. That's a gap in our distribution, not in jolta: everything below works
+> the same once it's installed. A winget package is
+> [submitted and awaiting review](https://github.com/microsoft/winget-pkgs/pull/413460),
+> after which this becomes `winget install OneAppPlatform.Jolta`. Setup is
 first-class on Windows too: it adds the shims and bin directories to your user
 `PATH` in the registry (preserving `%VAR%` entries, with the change broadcast so
 newly opened terminals see it immediately) and adds the `JAVA_HOME` hook to every

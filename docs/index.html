@@ -117,13 +117,19 @@ jolta setup</code></pre>
   </div>
 
   <div class="install-card">
-    <h3 id="install-windows">Windows <span class="arch">x86_64</span></h3>
+    <h3 id="install-windows"><span id="windows"></span>Windows <span class="arch">x86_64</span></h3>
     <p>Download <code>jolta-x86_64-pc-windows-msvc.zip</code> from the
     <a href="https://github.com/OneAppPlatform/jolta/releases">releases page</a>, unzip, then:</p>
     <pre><code>.\jolta.exe setup</code></pre>
     <p>Setup adds the user <code>PATH</code> entries and the PowerShell
     <code>JAVA_HOME</code> hook automatically — open a new terminal and run
     <code>jolta doctor</code>.</p>
+    <p><small><b>Sorry about the manual step.</b> macOS and Linux get a one-line installer and
+    Windows doesn't yet — that's a gap on our side, not a limitation of jolta itself, which is
+    fully supported on Windows once installed. A winget package is
+    <a href="https://github.com/microsoft/winget-pkgs/pull/413460">submitted and awaiting
+    review</a>; when it merges this becomes
+    <code>winget install OneAppPlatform.Jolta</code>.</small></p>
   </div>
 </div>
 
