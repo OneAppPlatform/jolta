@@ -24,6 +24,10 @@ trap 'rm -rf "$work"' EXIT INT TERM
 
 export JOLTA_HOME="$work/home"
 export JOLTA_NO_AUTO_INSTALL=1
+# jolta scans Homebrew's opt dir for JDKs; point it at an empty prefix so the
+# developer's own `brew install openjdk` cannot leak into these assertions
+# (section Q overrides this to exercise the scan against a fake prefix).
+export HOMEBREW_PREFIX="$work/nobrew"
 unset JAVA_HOME JOLTA_DOWNLOAD_BASE 2>/dev/null || true
 
 pass=0; fail=0; failed_names=''
@@ -1608,6 +1612,114 @@ check_rc "setup from a plain binary succeeds" 0 "$rc"
 [ -f "$JOLTA_HOME/bin/jolta" ] && [ ! -L "$JOLTA_HOME/bin/jolta" ] \
   && ok "non-brew setup installs a copy" \
   || bad "non-brew setup installs a copy" "     missing or symlink"
+
+# =================================================================
+section "Q. Homebrew keg JDK discovery (formulae never reach java_home)"
+# =================================================================
+
+# `brew install openjdk@21` puts the JDK inside its own keg and only prints a
+# caveat suggesting you symlink it into /Library/Java yourself. Almost nobody
+# does, so /usr/libexec/java_home never reports it — jolta has to read the keg
+# directly or brew-installed JDKs are simply invisible.
+hb="$work/hb"
+mk_jdk -b "$hb/opt/openjdk@79/libexec/openjdk.jdk" 79.0.1 "Homebrew"   # macOS
+mk_jdk    "$hb/opt/openjdk@78/libexec"              78.0.2 "Homebrew"  # Linux
+# brew symlinks launchers to the keg root; that root has no release file and
+# must not be reported as a JAVA_HOME of its own
+mkdir -p "$hb/opt/openjdk@79/bin" && : > "$hb/opt/openjdk@79/bin/java"
+# a formula that merely sounds Java-ish is not a JDK
+mkdir -p "$hb/opt/javacc/bin" && : > "$hb/opt/javacc/bin/javacc"
+
+out=$(HOMEBREW_PREFIX="$hb" jolta list 2>/dev/null)
+check "brew keg is found (macOS bundle layout)" \
+  "$hb/opt/openjdk@79/libexec/openjdk.jdk/Contents/Home" "$out"
+check "brew keg is found (Linux libexec layout)" "$hb/opt/openjdk@78/libexec" "$out"
+check "brew keg reports its real version" "79.0.1" "$out"
+check_not "keg root is not listed as a JDK" "openjdk@79/bin" "$out"
+check_not "javacc is not mistaken for a JDK" "javacc" "$out"
+
+# discovered kegs are usable, not just listed
+mkdir -p "$work/q" && cd "$work/q"
+echo 79 > .java-version
+check_eq "a pin resolves to the brew keg" \
+  "$hb/opt/openjdk@79/libexec/openjdk.jdk/Contents/Home" \
+  "$(HOMEBREW_PREFIX="$hb" jolta home 2>/dev/null)"
+
+# the same keg reached by two paths (brew's opt symlink and a hand-made
+# /Library/Java-style symlink) is one JDK, not two rows
+ln -s "$hb/opt/openjdk@79/libexec/openjdk.jdk/Contents/Home" "$work/hb-alias"
+n=$(HOMEBREW_PREFIX="$hb" JAVA_HOME_79_ARM64="$work/hb-alias" jolta list 2>/dev/null \
+      | grep -c '79\.0\.1')
+check_eq "one keg reached two ways lists once" "1" "$n"
+
+# a machine with no Homebrew at all must not error or invent entries
+out=$(HOMEBREW_PREFIX="$work/absent" jolta list 2>/dev/null)
+check_not "absent brew prefix adds nothing" "opt/openjdk" "$out"
+
+# =================================================================
+section "R. java_home registration (an installed JDK is a visible JDK)"
+# =================================================================
+
+# Installing a JDK should make it discoverable as one, not just to jolta.
+# macOS-only: elsewhere there is no registry and the calls are inert.
+if [ "$(uname -s)" = Darwin ]; then
+  # HOME picks the registry dir, so a scratch HOME keeps this out of the
+  # developer's own ~/Library/Java/JavaVirtualMachines. Note java_home itself
+  # ignores $HOME (it uses getpwuid), so this isolates jolta's writes only —
+  # these cases never invoke java_home.
+  reghome="$work/reghome"
+  reg="$reghome/Library/Java/JavaVirtualMachines"
+  jreg() { env HOME="$reghome" jolta "$@"; }
+
+  # java_home only reads macOS bundles, so a flat install has nothing to link
+  mk_jdk -b temurin-45.0.1 45.0.1 "Eclipse Adoptium"   # bundle
+  mk_jdk    temurin-44.0.1 44.0.1 "Eclipse Adoptium"   # flat
+
+  jreg reshim >/dev/null 2>&1
+  check "bundle JDKs are registered, no opt-in needed" "jolta-temurin-45.0.1.jdk" "$(ls "$reg" 2>&1)"
+  check_not "flat JDKs are skipped, not dead-linked" "jolta-temurin-44.0.1.jdk" "$(ls "$reg" 2>&1)"
+  check_eq "link targets the install root (java_home wants the bundle)" \
+    "$JOLTA_HOME/jdks/temurin-45.0.1" "$(readlink "$reg/jolta-temurin-45.0.1.jdk")"
+
+  # entries jolta does not own are untouchable: a real JDK dir, and a decoy
+  # wearing the jolta- prefix but resolving outside $JOLTA_HOME/jdks
+  mkdir -p "$reg/vendor-99.jdk/Contents/Home" "$work/elsewhere"
+  ln -s "$work/elsewhere" "$reg/jolta-imposter.jdk"
+  jreg reshim >/dev/null 2>&1
+  check "a foreign JDK is left alone" "vendor-99.jdk" "$(ls "$reg" 2>&1)"
+  check "a jolta-named foreign link is left alone" "jolta-imposter.jdk" "$(ls "$reg" 2>&1)"
+
+  # uninstalling removes the entry rather than leaving junk behind
+  jreg uninstall temurin-45.0.1 >/dev/null 2>&1
+  check_not "uninstall unregisters" "jolta-temurin-45.0.1.jdk" "$(ls "$reg" 2>&1)"
+  check "uninstall still spares foreign entries" "vendor-99.jdk" "$(ls "$reg" 2>&1)"
+
+  # a hand-deleted entry comes back: the registry tracks what is installed
+  mk_jdk -b temurin-43.0.1 43.0.1 "Eclipse Adoptium"
+  jreg reshim >/dev/null 2>&1
+  rm -f "$reg/jolta-temurin-43.0.1.jdk"
+  jreg reshim >/dev/null 2>&1
+  check "a removed entry is restored on the next reshim" "jolta-temurin-43.0.1.jdk" "$(ls "$reg" 2>&1)"
+
+  # a JDK deleted behind jolta's back leaves a dangling entry. java_home
+  # ignores those, so cleaning up is tidiness — but it must happen, or the
+  # registry accumulates rot forever.
+  rm -rf "$JOLTA_HOME/jdks/temurin-43.0.1"
+  jreg reshim >/dev/null 2>&1
+  check_not "a hand-deleted JDK's entry is cleaned up" "jolta-temurin-43.0.1.jdk" "$(ls "$reg" 2>&1)"
+
+  # Registration is a convenience on top of the install: it must never be the
+  # thing that fails one. Every hostile registry gets skipped, not fatal.
+  jolta_rc env HOME="$work/nonexistent-home/x" jolta reshim
+  check_rc "an unreachable registry does not fail the reshim" 0 "$rc"
+  chmod 500 "$reg"
+  jolta_rc jreg reshim
+  check_rc "an unwritable registry does not fail the reshim" 0 "$rc"
+  chmod 700 "$reg"
+  # HOME-less (cron, containers): with an explicit JOLTA_HOME this must work
+  jolta_rc env -u HOME -u USERPROFILE JOLTA_HOME="$JOLTA_HOME" jolta reshim
+  check_rc "a HOME-less reshim still succeeds" 0 "$rc"
+fi
 
 # =================================================================
 echo

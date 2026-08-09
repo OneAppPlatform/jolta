@@ -143,6 +143,9 @@ pub fn cmd_reshim() {
     clear_cache();
     touch_stamp();
     println!("{} {count} shims in {}", ok_mark(), shims.display());
+    // an installed JDK should be discoverable as one: keep /usr/libexec/
+    // java_home's view in step with what jolta actually has
+    sync_registry_after_change();
 }
 
 /// Bump $JOLTA_HOME/.stamp so shell hooks notice state changed and refresh
@@ -1161,6 +1164,134 @@ pub fn cmd_uninstall(name: &str) {
 /// jolta vendor [name|--unset]: the preferred distro for vendorless specs.
 /// Resolution prefers this vendor's builds (even over higher builds of other
 /// vendors) and vendorless installs fetch it; explicit specs always win.
+/// The per-user JVM registry `/usr/libexec/java_home` reads. The system-wide
+/// /Library/Java/JavaVirtualMachines would need sudo; java_home treats both
+/// alike, so jolta uses the one it can write.
+///
+/// Reads $HOME directly rather than via home_dir(), which dies when it is
+/// unset: with an explicit $JOLTA_HOME, reshim works in HOME-less
+/// environments (cron, containers) and registration must not be what breaks
+/// it — same reasoning as sdkman_java_dir.
+#[cfg(target_os = "macos")]
+fn jvm_registry_dir() -> Option<PathBuf> {
+    let home = env::var("HOME").ok().filter(|s| !s.is_empty())?;
+    Some(PathBuf::from(home).join("Library/Java/JavaVirtualMachines"))
+}
+
+/// A registry entry jolta owns: named "jolta-*.jdk" AND a symlink that
+/// resolves inside $JOLTA_HOME/jdks. Both halves matter — the registry also
+/// holds JDKs the user installed by other means, and this is the guard that
+/// keeps sync from ever deleting one.
+#[cfg(target_os = "macos")]
+fn is_ours(entry: &Path) -> bool {
+    let named_ours = entry.file_name().is_some_and(|n| n.to_string_lossy().starts_with("jolta-"));
+    let is_link = fs::symlink_metadata(entry).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+    // compare resolved paths: $JOLTA_HOME itself may sit behind a symlink
+    let jdks =
+        fs::canonicalize(jolta_home().join("jdks")).unwrap_or_else(|_| jolta_home().join("jdks"));
+    let points_into_ours = fs::read_link(entry)
+        .map(|t| fs::canonicalize(&t).unwrap_or(t).starts_with(&jdks))
+        .unwrap_or(false);
+    named_ours && is_link && points_into_ours
+}
+
+/// Mirror the jolta-managed JDKs into the JVM registry so
+/// `/usr/libexec/java_home -V` lists them — an installed JDK should be
+/// discoverable as one, not just through jolta. Homebrew formulae have the
+/// same gap and tell you to symlink by hand; jolta does it for you.
+///
+/// Returns (added, removed). Runs on every reshim rather than only on install,
+/// so entries whose JDK was uninstalled, upgraded, pruned or hand-deleted get
+/// cleaned up too. That part is hygiene, not correctness: java_home resolves
+/// through the symlink and silently skips one whose target is gone (verified —
+/// it lists neither the entry nor an error). Left alone they would just
+/// accumulate as junk in a directory the user reads. Only entries `is_ours`
+/// accepts are ever created or destroyed.
+#[cfg(target_os = "macos")]
+fn sync_registry() -> (usize, usize) {
+    // no HOME, or a registry we can't create: skip quietly. Registration is a
+    // convenience layered on top of the install — it must never be the thing
+    // that fails one.
+    let Some(reg) = jvm_registry_dir() else { return (0, 0) };
+    if fs::create_dir_all(&reg).is_err() {
+        return (0, 0);
+    }
+    // java_home only understands macOS bundles, so a flat install has nothing
+    // worth linking — skip it rather than create an entry it can't read.
+    let mut want: Vec<(String, PathBuf)> = Vec::new();
+    if let Ok(entries) = fs::read_dir(jolta_home().join("jdks")) {
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let dir = e.path();
+            if dir.is_dir() && dir.join("Contents/Home").is_dir() {
+                want.push((format!("jolta-{}.jdk", e.file_name().to_string_lossy()), dir));
+            }
+        }
+    }
+    let (mut added, mut removed) = (0, 0);
+    if let Ok(entries) = fs::read_dir(&reg) {
+        for e in entries.flatten() {
+            let keep = want.iter().any(|(name, _)| name.as_str() == e.file_name());
+            if !keep && is_ours(&e.path()) && fs::remove_file(e.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    for (name, target) in &want {
+        let link = reg.join(name);
+        if fs::read_link(&link).is_ok_and(|t| &t == target) {
+            continue; // already correct
+        }
+        if fs::symlink_metadata(&link).is_ok() {
+            if !is_ours(&link) {
+                continue; // someone else's entry wearing our name: leave it
+            }
+            let _ = fs::remove_file(&link);
+        }
+        if std::os::unix::fs::symlink(target, &link).is_ok() {
+            added += 1;
+        }
+    }
+    (added, removed)
+}
+
+/// Remove every registry entry jolta owns (used by implode).
+#[cfg(target_os = "macos")]
+pub fn unregister_all() -> usize {
+    let mut removed = 0;
+    let Some(reg) = jvm_registry_dir() else { return 0 };
+    if let Ok(entries) = fs::read_dir(reg) {
+        for e in entries.flatten() {
+            if is_ours(&e.path()) && fs::remove_file(e.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+/// Called from cmd_reshim, the common tail of install/uninstall/upgrade/
+/// prune/setup — so every path that changes the JDK set keeps java_home
+/// honest. Deliberately not opt-out-able: "an installed JDK is visible to the
+/// system" is only useful as an invariant, and the entries are user-level
+/// symlinks jolta owns, removable at any time.
+#[cfg(target_os = "macos")]
+pub fn sync_registry_after_change() {
+    let (added, removed) = sync_registry();
+    if added + removed > 0 {
+        println!("{} java_home sees {added} new, {removed} removed", ok_mark());
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn sync_registry_after_change() {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn unregister_all() -> usize {
+    0
+}
+
 pub fn cmd_vendor(rest: &[String]) {
     let f = jolta_home().join("vendor");
     match rest.first().map(String::as_str) {
@@ -1347,6 +1478,13 @@ pub fn cmd_implode(args: &[String]) {
     }
     #[cfg(unix)]
     strip_jolta_blocks(&profile);
+    // java_home ignores dangling entries, so this is tidiness rather than
+    // repair: uninstalling jolta shouldn't leave jolta-named junk behind in a
+    // directory the user (and other JDK tools) look at
+    let unregistered = unregister_all();
+    if unregistered > 0 {
+        println!("{} removed {unregistered} java_home registry entr(ies)", ok_mark());
+    }
     let _ = fs::remove_dir_all(&home);
     println!("{} removed {} — open a new shell to finish. So long!", ok_mark(), home.display());
 }

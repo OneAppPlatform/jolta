@@ -146,6 +146,12 @@ pub const PAGES: &[HelpPage] = &[
              the vendor provides one. Set JOLTA_DOWNLOAD_BASE to install from an \
              offline mirror (see 'jolta help mirror'). --fresh bypasses the 24h \
              release-metadata cache.",
+            "On macOS the JDK is also registered with /usr/libexec/java_home, so \
+             'java_home -V' and anything that asks it see it like any other JDK on \
+             the machine. That is a symlink into ~/Library/Java/JavaVirtualMachines \
+             (no sudo; the system-wide directory is untouched), removed again by \
+             uninstall, upgrade and prune. Best-effort: a registry it cannot write \
+             is skipped, never fatal.",
         ],
         examples: &[
             ("jolta install 21", "latest 21.x of the default distro"),

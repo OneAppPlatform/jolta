@@ -219,6 +219,64 @@ pub fn sdkman_java_dir() -> Option<PathBuf> {
     Some(root.join("candidates").join("java"))
 }
 
+/// Homebrew prefixes to scan. $HOMEBREW_PREFIX (what `brew shellenv` exports)
+/// is authoritative when set and replaces the guesses, the same way
+/// $SDKMAN_DIR does above — otherwise fall back to the per-platform defaults:
+/// Apple Silicon, Intel, Linuxbrew.
+fn homebrew_prefixes() -> Vec<PathBuf> {
+    if let Some(p) = std::env::var("HOMEBREW_PREFIX").ok().filter(|s| !s.is_empty()) {
+        return vec![PathBuf::from(p)];
+    }
+    ["/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"].iter().map(PathBuf::from).collect()
+}
+
+/// JDKs installed by Homebrew *formulae* (openjdk, openjdk@21, graalvm taps).
+///
+/// These are invisible to `/usr/libexec/java_home`: brew keeps the bundle
+/// inside its own keg and only prints a caveat suggesting you symlink it into
+/// /Library/Java/JavaVirtualMachines yourself. Nobody does, so without this
+/// scan a `brew install openjdk@21` never shows up (casks are unaffected —
+/// those do install into /Library/Java).
+///
+/// Scans <prefix>/opt rather than the Cellar: it is one readdir instead of a
+/// walk, and the opt symlink is stable across `brew upgrade` where the
+/// versioned keg path is not.
+fn homebrew_jdks() -> Vec<(String, PathBuf)> {
+    homebrew_prefixes().iter().flat_map(|p| homebrew_jdks_in(p)).collect()
+}
+
+/// The Homebrew scan for a single prefix.
+fn homebrew_jdks_in(prefix: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(prefix.join("opt")) else { return out };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    // read_dir order is not stable across machines; two kegs of the same
+    // version must tie-break the same way everywhere (as in list_managed)
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if !(name.contains("jdk") || name.contains("java") || name.contains("graal")) {
+            continue;
+        }
+        let keg = entry.path();
+        // macOS keeps a bundle at libexec/openjdk.jdk/Contents/Home (found by
+        // managed_home's nested lookup); Linux puts the JDK root at libexec
+        // itself. The keg root holds only a bin/java symlink and no release
+        // file, so it is the last resort, not the first guess.
+        let home = [keg.join("libexec"), keg.clone()]
+            .into_iter()
+            .map(|d| managed_home(&d))
+            .find(|h| has_java(h));
+        if let Some(home) = home {
+            // "openjdk@21" yields 21 when a keg somehow has no release file
+            if let Some(v) = jdk_version(&home).or_else(|| version_from_name(&keg)) {
+                out.push((v, home));
+            }
+        }
+    }
+    out
+}
+
 /// The JDK sdkman itself would use for a literal candidate ID from `.sdkmanrc`
 /// ("21.0.5.11.1-amzn"). sdkman names every install directory after the exact
 /// ID it publishes, so this matches where comparing versions cannot: Corretto
@@ -376,6 +434,7 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
             }
         }
     }
+    out.extend(homebrew_jdks());
     let mut bases = vec![PathBuf::from("/usr/lib/jvm")];
     bases.extend(sdkman_java_dir());
     // Windows installers drop JDKs under Program Files vendor directories
@@ -416,6 +475,12 @@ pub fn list_system() -> Vec<(String, PathBuf)> {
             }
         }
     }
+    // One install can surface under several paths: brew's opt symlink, the
+    // Cellar keg behind it, and a hand-made /Library/Java symlink are all the
+    // same JDK. Collapse on the canonical target, keeping the first seen —
+    // java_home's own answer outranks a path we inferred.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|(_, home)| seen.insert(home.canonicalize().unwrap_or_else(|_| home.clone())));
     out
 }
 
@@ -588,5 +653,78 @@ mod tests {
         assert!(numkey("1.8.0_402") > numkey("1.8.0_392"));
         assert!(numkey("21.0.10") > numkey("21.0.2"));
         assert!(is_exact("21.0.2") && !is_exact("21") && !is_exact("1.8"));
+    }
+
+    /// Lay out one keg the way `brew install` does. `bundle` picks the macOS
+    /// shape (libexec/openjdk.jdk/Contents/Home) over the Linux one (libexec).
+    fn fake_keg(prefix: &Path, formula: &str, version: &str, bundle: bool) {
+        let home = match bundle {
+            true => prefix.join("opt").join(formula).join("libexec/openjdk.jdk/Contents/Home"),
+            false => prefix.join("opt").join(formula).join("libexec"),
+        };
+        fs::create_dir_all(home.join("bin")).unwrap();
+        fs::write(home.join("bin/java"), "").unwrap();
+        fs::write(home.join("release"), format!("JAVA_VERSION=\"{version}\"\nIMPLEMENTOR=\"Homebrew\"\n"))
+            .unwrap();
+        // brew symlinks the launchers up to the keg root; that root is NOT a
+        // JAVA_HOME (no release file) and must not be reported as one
+        let root_bin = prefix.join("opt").join(formula).join("bin");
+        fs::create_dir_all(&root_bin).unwrap();
+        fs::write(root_bin.join("java"), "").unwrap();
+    }
+
+    /// Homebrew *formulae* never register with /usr/libexec/java_home — brew
+    /// only prints a caveat suggesting you symlink into /Library/Java
+    /// yourself. So `brew install openjdk@21` is invisible unless the keg is
+    /// scanned directly, on both the macOS and Linux keg layouts.
+    #[test]
+    fn homebrew_kegs_are_discovered() {
+        let prefix = std::env::temp_dir().join(format!("jolta-unit-{}-brew", std::process::id()));
+        let _ = fs::remove_dir_all(&prefix);
+        fake_keg(&prefix, "openjdk@21", "21.0.12", true); // macOS bundle
+        fake_keg(&prefix, "openjdk", "25.0.1", false); // Linux layout
+        // formulae that merely sound Java-ish must not be mistaken for JDKs
+        fs::create_dir_all(prefix.join("opt/javacc/bin")).unwrap();
+        fs::write(prefix.join("opt/javacc/bin/javacc"), "").unwrap();
+        fs::create_dir_all(prefix.join("opt/openssl@3/bin")).unwrap();
+
+        let found = homebrew_jdks_in(&prefix);
+        let versions: Vec<&str> = found.iter().map(|(v, _)| v.as_str()).collect();
+        assert_eq!(versions, ["25.0.1", "21.0.12"], "both layouts, javacc excluded: {found:?}");
+        assert!(found[0].1.ends_with("opt/openjdk/libexec"), "linux home: {:?}", found[0].1);
+        assert!(
+            found[1].1.ends_with("opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"),
+            "macos home: {:?}",
+            found[1].1
+        );
+        // the release file, not the formula name, decides the vendor
+        assert_eq!(vendor_of(&found[1].1), Some("openjdk"));
+        let _ = fs::remove_dir_all(&prefix);
+    }
+
+    /// A keg reached by two paths (brew's opt symlink and the Cellar behind
+    /// it, or a hand-made /Library/Java symlink) is still one JDK.
+    #[test]
+    fn same_keg_via_two_paths_is_one_jdk() {
+        let root = std::env::temp_dir().join(format!("jolta-unit-{}-brewdup", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let prefix = root.join("brew");
+        fake_keg(&prefix, "openjdk@21", "21.0.12", true);
+        let real = prefix.join("opt/openjdk@21");
+        let link = root.join("alias");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(not(unix))]
+        return;
+
+        let direct = managed_home(&real.join("libexec"));
+        let via_link = managed_home(&link.join("libexec"));
+        assert_ne!(direct, via_link, "distinct paths");
+        assert_eq!(
+            direct.canonicalize().unwrap(),
+            via_link.canonicalize().unwrap(),
+            "same JDK: list_system dedups on the canonical target"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }
