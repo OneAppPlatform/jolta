@@ -58,7 +58,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
       "name": "How do I switch Java versions per project?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Run jolta pin 21 in the project. That writes a .java-version file, and from then on cd-ing into that directory selects Java 21 automatically \u2014 no command to re-run, and nothing to remember. Pin a different version in another project and moving between them switches for you."
+        "text": "Run jolta pin 21 in the project. That writes a .java-version file, and from then on cd-ing into that directory selects Java 21 automatically. There's no command to re-run. Pin a different version in another project and moving between them switches for you."
       }
     },
     {
@@ -74,7 +74,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
       "name": "Does it install JDKs, or only switch between ones I already have?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "It installs them. jolta install 21 fetches a JDK, and pinning a version you don't have downloads it on first use \u2014 so entering a directory never blocks on the network. It also finds JDKs you installed elsewhere (Homebrew, /Library/Java, SDKMAN, Program Files) and can use those instead of downloading a second copy."
+        "text": "It installs them. jolta install 21 fetches a JDK, and pinning a version you don't have downloads it on first use, so entering a directory never blocks on the network. It also finds JDKs you installed elsewhere (Homebrew, /Library/Java, SDKMAN, Program Files) and can use those instead of downloading a second copy."
       }
     },
     {
@@ -98,7 +98,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
       "name": "Does it work with IntelliJ IDEA?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Yes \u2014 there's a plugin that reads the same .java-version and sets the Project SDK, the Gradle JVM and the Maven importer JDK from it, with nothing to configure. It follows along live, so pinning a new version in a terminal switches the IDE within seconds without a restart or re-import."
+        "text": "Yes. There's a plugin that reads the same .java-version and sets the Project SDK, the Gradle JVM and the Maven importer JDK from it, with nothing to configure. It follows along live, so pinning a new version in a terminal switches the IDE within seconds without a restart or re-import."
       }
     },
     {
@@ -169,11 +169,11 @@ $ jolta pin 21          <b># writes .java-version</b>
 $ java -version         <b># → OpenJDK 21, automatically</b>
 
 $ cd ../legacy-app      <b># has .java-version with "8"</b>
-$ java -version         <b># → 1.8 — no sdk use, no jenv shell, no export JAVA_HOME</b></code></pre>
+$ java -version         <b># → 1.8, without running anything first</b></code></pre>
 
 <h2 id="install">Install</h2>
-<p>Prebuilt binaries for every platform — no Rust toolchain, no runtime, nothing to
-compile.</p>
+<p>Prebuilt binaries for every platform. There's no Rust toolchain to install and
+nothing to compile.</p>
 
 <div class="install-grid">
   <div class="install-card">
@@ -197,11 +197,11 @@ jolta setup</code></pre>
     <a href="https://github.com/OneAppPlatform/jolta/releases">releases page</a>, unzip, then:</p>
     <pre><code>.\jolta.exe setup</code></pre>
     <p>Setup adds the user <code>PATH</code> entries and the PowerShell
-    <code>JAVA_HOME</code> hook automatically — open a new terminal and run
+    <code>JAVA_HOME</code> hook automatically. Open a new terminal and run
     <code>jolta doctor</code>.</p>
     <p><small><b>Sorry about the manual step.</b> macOS and Linux get a one-line installer and
-    Windows doesn't yet — that's a gap on our side, not a limitation of jolta itself, which is
-    fully supported on Windows once installed. A winget package is
+    Windows doesn't yet. That's a gap in how we ship it, not in jolta, which is fully
+    supported on Windows once installed. A winget package is
     <a href="https://github.com/microsoft/winget-pkgs/pull/413460">submitted and awaiting
     review</a>; when it merges this becomes
     <code>winget install OneAppPlatform.Jolta</code>.</small></p>
@@ -213,29 +213,29 @@ jolta setup</code></pre>
 
 <h2 id="how">How it works</h2>
 <p>Jolta puts lightweight <strong>shims</strong> on your <code>PATH</code>
-(<code>java</code>, <code>javac</code>, <code>jar</code>, <code>jshell</code>, …) — each one a
+(<code>java</code>, <code>javac</code>, <code>jar</code>, <code>jshell</code>, …). Each one is a
 link to the single jolta binary. Every invocation walks up from the current directory to
 the nearest <code>.java-version</code>, resolves an installed JDK for it, sets
-<code>JAVA_HOME</code>, and execs the real tool. Resolution takes ~2&nbsp;ms, invisible
-next to JVM startup.</p>
+<code>JAVA_HOME</code>, and execs the real tool. Resolution takes about 2&nbsp;ms, which you
+won't notice next to JVM startup.</p>
 <p>If a project pins a version you don't have, the first invocation
-<strong>downloads it on demand</strong> (Volta-style) from the distro's official endpoint —
-never triggered by merely <code>cd</code>-ing around, safe under parallel builds, and
-disabled with <code>JOLTA_NO_AUTO_INSTALL=1</code>. Restricted networks can set
-<code>JOLTA_DOWNLOAD_BASE</code> to serve JDKs from an internal mirror
+<strong>downloads it on demand</strong> from the distro's official endpoint. Changing
+directory never triggers a download, only actually running something does. It's safe
+under parallel builds, and <code>JOLTA_NO_AUTO_INSTALL=1</code> turns it off.</p>
+<p>Restricted networks can point <code>JOLTA_DOWNLOAD_BASE</code> at an internal mirror
 (<code>{base}/{vendor}/{version}/{os}-{arch}.{ext}</code>) instead of the vendor
-endpoints — and <code>jolta mirror sync /srv/jdks</code> builds that mirror for you:
-all platforms, sha256 sidecars verified on every install, and metadata that keeps
-<code>update</code>/<code>upgrade</code>/<code>catalog</code> and the first-run LTS
-bootstrap working fully air-gapped. <code>jolta mirror verify</code> re-hashes it on
-a schedule.</p>
+endpoints. <code>jolta mirror sync /srv/jdks</code> builds that mirror: every platform,
+sha256 sidecars that are verified on each install, and enough metadata to keep
+<code>update</code>, <code>upgrade</code>, <code>catalog</code> and the first-run LTS
+bootstrap working air-gapped. <code>jolta mirror verify</code> re-hashes it on a
+schedule.</p>
 <p>Jolta also finds the JDKs you already have: Homebrew,
 <code>/Library/Java/JavaVirtualMachines</code>, SDKMAN, <code>/usr/lib/jvm</code>,
 Windows <code>Program Files</code>, and <code>JAVA_HOME_&lt;major&gt;_*</code> environment
 variables.</p>
 
 <h2 id="compared">How jolta compares</h2>
-<p>An honest table, current as of July 2026 — corrections
+<p>Current as of July 2026. Corrections
 <a href="https://github.com/OneAppPlatform/jolta/issues">welcome</a>.</p>
 <table class="cmp">
 <tr><th></th><th>jolta</th><th>mise</th><th>SDKMAN</th><th>jenv</th><th>asdf</th></tr>
@@ -280,30 +280,30 @@ variables.</p>
 <tr><td>Battle-tested since</td>
   <td class="m">2026</td><td class="y">2023</td><td class="y">2012</td><td class="y">2011</td><td class="y">2014</td></tr>
 </table>
-<p class="muted">Fair summary: if Java is one of five languages you juggle, mise is
-excellent. If Java is the job, jolta does the whole job by default — nothing to
-enable, nothing to configure, and a <code>.java-version</code> is all your repo
-needs.</p>
+<p class="muted">If Java is one of five languages you juggle, mise is excellent. If Java
+is the job, jolta does all of it by default. There's nothing to enable, and a
+<code>.java-version</code> is all your repo needs.</p>
 
 <h3 id="why-shims">Why shims work better for Java than they did for Node</h3>
-<p>Volta proved this architecture, but Node made it pay rent twice: <code>node</code>
-starts in ~30&nbsp;ms, so shim overhead was borderline noticeable, and Node tooling
-finds everything through <code>PATH</code> alone — which forced Volta to also intercept
-<code>npm</code>'s global installs, the source of most of its open bugs. Java inverts
-both economics. JVM startup is 40–100&nbsp;ms+, so jolta's ~2&nbsp;ms resolution
-vanishes below measurement noise; and the long-running tools that matter — Maven,
-the Gradle daemon, IDEs — read <code>JAVA_HOME</code> rather than probing
-<code>PATH</code>, so jolta's hook keeps one environment variable in sync and the hot
-path never crosses a shim at all. Same design, right ecosystem.</p>
+<p>Volta proved this architecture, but Node charged it twice. <code>node</code> starts in
+about 30&nbsp;ms, so shim overhead was borderline noticeable. Node tooling also finds
+everything through <code>PATH</code> alone, which forced Volta to intercept
+<code>npm</code>'s global installs as well, and that is where most of its open bugs
+live.</p>
+<p>Java inverts both. JVM startup is 40–100&nbsp;ms or more, so a 2&nbsp;ms resolution
+disappears below measurement noise. The long-running tools that matter (Maven, the
+Gradle daemon, IDEs) read <code>JAVA_HOME</code> rather than probing <code>PATH</code>,
+so jolta keeps one environment variable in sync and the hot path never crosses a shim
+at all.</p>
 <p>mise makes the opposite bet: a shell hook rewrites your <code>PATH</code> before
 every prompt to point at the resolved tools directly. That's zero-overhead at
-invocation time, but the rewritten environment only exists where the hook runs —
-an interactive shell — and only as of the last prompt. Scripts, Makefiles, CI
+invocation time, but the rewritten environment only exists where the hook runs,
+meaning an interactive shell, and only as of the last prompt. Scripts, Makefiles, CI
 steps, cron jobs, and IDE-spawned builds see a stale snapshot or nothing, and
 keeping the surgery coherent across version switches and other tools'
 <code>PATH</code> edits is its own class of bugs. Jolta's shims re-resolve from the
 working directory on <em>every</em> invocation, so the same project gets the same
-JDK everywhere — terminal, CI, cron, IDE — with zero shell integration required.
+JDK everywhere: terminal, CI, cron, IDE. No shell integration required.
 The shell hook only keeps <code>JAVA_HOME</code> exported for tools that read it;
 everything else works without it.</p>
 
@@ -311,8 +311,8 @@ everything else works without it.</p>
 
 <h3 id="faq-switch">How do I switch Java versions per project?</h3>
 <p>Run <code>jolta pin 21</code> in the project. That writes a <code>.java-version</code> file,
-and from then on <code>cd</code>-ing into that directory selects Java 21 automatically — no
-command to re-run, and nothing to remember. Pin a different version in another project and
+and from then on <code>cd</code>-ing into that directory selects Java 21 automatically. There's no
+command to re-run. Pin a different version in another project and
 moving between them switches for you.</p>
 
 <h3 id="faq-java-home">Does it set <code>JAVA_HOME</code>, or just <code>PATH</code>?</h3>
@@ -323,7 +323,7 @@ pointed at the version in effect for the directory you're in.</p>
 
 <h3 id="faq-install">Does it install JDKs, or only switch between ones I already have?</h3>
 <p>It installs them. <code>jolta install 21</code> fetches a JDK, and pinning a version you
-don't have downloads it on first use — so entering a directory never blocks on the network.
+don't have downloads it on first use, so entering a directory never blocks on the network.
 It also finds JDKs you installed elsewhere (Homebrew, <code>/Library/Java</code>, SDKMAN,
 <code>Program Files</code>) and can use those instead of downloading a second copy.</p>
 
@@ -338,7 +338,7 @@ repositories keep working and you don't need the whole team to switch first. Whe
 in the same directory, <code>.java-version</code> wins.</p>
 
 <h3 id="faq-intellij">Does it work with IntelliJ IDEA?</h3>
-<p>Yes — there's a plugin that reads the same <code>.java-version</code> and sets the Project
+<p>Yes. There's a plugin that reads the same <code>.java-version</code> and sets the Project
 SDK, the Gradle JVM and the Maven importer JDK from it, with nothing to configure. It follows
 along live, so pinning a new version in a terminal switches the IDE within seconds without a
 restart or re-import.</p>
@@ -361,7 +361,7 @@ the <a href="manual.html"><strong>full manual</strong></a>.</p>
 <pre><code>jolta implode</code></pre>
 <p>Removes <code>~/.jolta</code> and the jolta lines from your shell profile, after a
 confirmation prompt that lists exactly which jolta-installed JDKs will be deleted.
-JDKs installed outside jolta and your <code>.java-version</code> files are never touched —
+JDKs installed outside jolta and your <code>.java-version</code> files are never touched.
 jolta only ever deletes what it downloaded itself.</p>
 
 </main>
