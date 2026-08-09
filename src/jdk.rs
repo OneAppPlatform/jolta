@@ -662,15 +662,18 @@ mod tests {
             true => prefix.join("opt").join(formula).join("libexec/openjdk.jdk/Contents/Home"),
             false => prefix.join("opt").join(formula).join("libexec"),
         };
+        // has_java looks for java + EXE_SUFFIX, so a fixture named plain
+        // "java" is invisible on Windows and the whole scan reads as empty
+        let launcher = format!("java{}", std::env::consts::EXE_SUFFIX);
         fs::create_dir_all(home.join("bin")).unwrap();
-        fs::write(home.join("bin/java"), "").unwrap();
+        fs::write(home.join("bin").join(&launcher), "").unwrap();
         fs::write(home.join("release"), format!("JAVA_VERSION=\"{version}\"\nIMPLEMENTOR=\"Homebrew\"\n"))
             .unwrap();
         // brew symlinks the launchers up to the keg root; that root is NOT a
         // JAVA_HOME (no release file) and must not be reported as one
         let root_bin = prefix.join("opt").join(formula).join("bin");
         fs::create_dir_all(&root_bin).unwrap();
-        fs::write(root_bin.join("java"), "").unwrap();
+        fs::write(root_bin.join(&launcher), "").unwrap();
     }
 
     /// Homebrew *formulae* never register with /usr/libexec/java_home — brew
