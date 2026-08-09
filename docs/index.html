@@ -285,10 +285,10 @@ is the job, jolta does all of it by default. There's nothing to enable, and a
 <code>.java-version</code> is all your repo needs.</p>
 
 <h3 id="why-shims">Why shims work better for Java than they did for Node</h3>
-<p>Volta proved this architecture, but Node charged it twice. <code>node</code> starts in
+<p>Volta proved this architecture, but Node made it costly in two ways. <code>node</code> starts in
 about 30&nbsp;ms, so shim overhead was borderline noticeable. Node tooling also finds
 everything through <code>PATH</code> alone, which forced Volta to intercept
-<code>npm</code>'s global installs as well, and that is where most of its open bugs
+<code>npm</code>'s global installs as well, which is where most of its open bugs
 live.</p>
 <p>Java inverts both. JVM startup is 40–100&nbsp;ms or more, so a 2&nbsp;ms resolution
 disappears below measurement noise. The long-running tools that matter (Maven, the
@@ -300,8 +300,8 @@ every prompt to point at the resolved tools directly. That's zero-overhead at
 invocation time, but the rewritten environment only exists where the hook runs,
 meaning an interactive shell, and only as of the last prompt. Scripts, Makefiles, CI
 steps, cron jobs, and IDE-spawned builds see a stale snapshot or nothing, and
-keeping the surgery coherent across version switches and other tools'
-<code>PATH</code> edits is its own class of bugs. Jolta's shims re-resolve from the
+keeping that rewritten <code>PATH</code> correct across version switches and other
+tools' own edits to it is its own class of bugs. Jolta's shims re-resolve from the
 working directory on <em>every</em> invocation, so the same project gets the same
 JDK everywhere: terminal, CI, cron, IDE. No shell integration required.
 The shell hook only keeps <code>JAVA_HOME</code> exported for tools that read it;
