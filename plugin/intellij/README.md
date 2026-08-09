@@ -1,6 +1,6 @@
 # Jolta for IntelliJ
 
-Hands-off JDK selection in IntelliJ IDEA from the project's `.java-version`,
+Automatic JDK selection in IntelliJ IDEA from the project's `.java-version`,
 powered by the [jolta](https://oneappplatform.github.io/jolta/) CLI.
 
 ## Setting the version from the IDE

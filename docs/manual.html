@@ -246,6 +246,17 @@ as the default automatically.</p>
 Installs land in
 <code>$JOLTA_HOME/jdks/&lt;distro&gt;-&lt;version&gt;</code> and are re-shimmed
 immediately.</p>
+<p>On macOS an installed JDK is also registered with
+<code>/usr/libexec/java_home</code>, so <code>java_home&nbsp;-V</code> and anything
+that asks it list the JDK like any other on the machine — a JDK you installed should
+be discoverable as one, not only through jolta. (Homebrew has the same gap for its
+<em>formula</em> JDKs and asks you to symlink them by hand; jolta does it for you.)
+Registration is a symlink into <code>~/Library/Java/JavaVirtualMachines</code>, the
+per-user registry — no <code>sudo</code>, and the system-wide
+<code>/Library/Java/JavaVirtualMachines</code> is never touched. Uninstall,
+upgrade and prune remove the entry again, so the registry doesn't rot. It is
+best-effort throughout: an unwritable or unreachable registry is skipped silently
+rather than failing the install.</p>
 <p>Installs are defensive: concurrent installs of the same version serialize on a
 lock (parallel builds can fire many shims at once); a published
 <code>.sha256</code> sidecar is verified when present; the extracted JVM must
@@ -436,7 +447,11 @@ diagnose-only: jolta never edits profile lines it didn't write.</p>
 <p>Removes <code>$JOLTA_HOME</code> and the marked jolta blocks from your shell
 profile — after a confirmation prompt (<code>--yes</code> skips) that lists exactly
 which jolta-installed JDKs will be deleted. System JDKs and your projects'
-<code>.java-version</code> files are never touched.</p>
+<code>.java-version</code> files are never touched. On macOS the
+<code>/usr/libexec/java_home</code> entries jolta registered are removed too, so
+nothing of jolta's is left behind — entries you created yourself stay, since only
+symlinks named <code>jolta-*.jdk</code> that resolve inside
+<code>$JOLTA_HOME/jdks</code> are ever removed.</p>
 
 <h2 id="specs">Version specs</h2>
 <p>A spec is a version with an optional distro, joined by <code>@</code> or
@@ -550,7 +565,12 @@ instead of downloading their own JDKs behind your back.</p>
 <p>Every invocation sees the union of: jolta's own installs
 (<code>$JOLTA_HOME/jdks</code>); macOS's <code>/usr/libexec/java_home&nbsp;-V</code>
 (which covers <code>/Library/Java/JavaVirtualMachines</code>, Homebrew casks, and
-IntelliJ-downloaded JDKs); <code>/usr/lib/jvm</code>; SDKMAN's
+IntelliJ-downloaded JDKs); Homebrew <em>formula</em> kegs
+(<code>openjdk</code>, <code>openjdk@21</code>, …) read straight from
+<code>$HOMEBREW_PREFIX/opt</code>, since brew never registers those with
+<code>java_home</code> — it only prints a caveat suggesting you symlink them into
+<code>/Library/Java</code> yourself, so they would otherwise be invisible;
+<code>/usr/lib/jvm</code>; SDKMAN's
 <code>~/.sdkman/candidates/java</code> — or wherever <code>$SDKMAN_DIR</code> /
 <code>$SDKMAN_CANDIDATES_DIR</code> point (vendor read from the directory suffix,
 <code>Contents/Home</code> bundles handled, JDK&nbsp;8-era installs without a
@@ -558,6 +578,14 @@ IntelliJ-downloaded JDKs); <code>/usr/lib/jvm</code>; SDKMAN's
 under <code>Program Files</code>; and <code>JAVA_HOME_&lt;major&gt;_&lt;arch&gt;</code>
 environment variables (as set by GitHub Actions runners). No registration step —
 if it's on the machine, it resolves.</p>
+<p>The reverse direction holds too, on macOS: jolta's own installs are registered
+with <code>/usr/libexec/java_home</code> (see
+<a href="#cmd-install"><code>install</code></a>), so a JDK jolta downloaded shows up
+for tools that never heard of jolta. Note that registry is global and has no notion
+of a project pin — <code>java_home</code> answers the same in every directory,
+whatever a <code>.java-version</code> says. It tells you what is <em>on the
+machine</em>; <a href="#cmd-current"><code>jolta current</code></a> tells you what is
+active <em>here</em>.</p>
 
 <h2 id="env-vars">Environment variables</h2>
 <table>
@@ -569,6 +597,7 @@ if it's on the machine, it resolves.</p>
 <tr><td><code>JOLTA_FRESH</code> / <code>--fresh</code></td><td>Drop the remote-metadata cache for this invocation, then re-cache</td></tr>
 <tr><td><code>JOLTA_CACHE_TTL_HOURS</code></td><td>Remote-metadata cache lifetime (default 24)</td></tr>
 <tr><td><code>JAVA_HOME_&lt;major&gt;_*</code></td><td>Registers an extra JDK for discovery (CI images set these)</td></tr>
+<tr><td><code>HOMEBREW_PREFIX</code></td><td>Where Homebrew kegs are scanned for JDKs; authoritative when set, else <code>/opt/homebrew</code>, <code>/usr/local</code>, Linuxbrew</td></tr>
 <tr><td><code>NO_COLOR</code>, <code>TERM=dumb</code></td><td>Plain output; piped output is always uncolored</td></tr>
 </table>
 
