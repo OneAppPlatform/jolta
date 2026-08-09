@@ -308,50 +308,60 @@ The shell hook only keeps <code>JAVA_HOME</code> exported for tools that read it
 everything else works without it.</p>
 
 <h2 id="faq">Common questions</h2>
-
-<h3 id="faq-switch">How do I switch Java versions per project?</h3>
-<p>Run <code>jolta pin 21</code> in the project. That writes a <code>.java-version</code> file,
+<div class="faq">
+  <details open>
+    <summary><h3 id="faq-switch">How do I switch Java versions per project?</h3></summary>
+    <p>Run <code>jolta pin 21</code> in the project. That writes a <code>.java-version</code> file,
 and from then on <code>cd</code>-ing into that directory selects Java 21 automatically. There's no
 command to re-run. Pin a different version in another project and
 moving between them switches for you.</p>
-
-<h3 id="faq-java-home">Does it set <code>JAVA_HOME</code>, or just <code>PATH</code>?</h3>
-<p>Both. This matters because Maven and Gradle read <code>JAVA_HOME</code>: a version manager
+  </details>
+  <details>
+    <summary><h3 id="faq-java-home">Does it set <code>JAVA_HOME</code>, or just <code>PATH</code>?</h3></summary>
+    <p>Both. This matters because Maven and Gradle read <code>JAVA_HOME</code>: a version manager
 that only changes <code>PATH</code> leaves you with a <code>java</code> on the command line that
 disagrees with your build. jolta installs a shell hook that keeps <code>JAVA_HOME</code>
 pointed at the version in effect for the directory you're in.</p>
-
-<h3 id="faq-install">Does it install JDKs, or only switch between ones I already have?</h3>
-<p>It installs them. <code>jolta install 21</code> fetches a JDK, and pinning a version you
+  </details>
+  <details>
+    <summary><h3 id="faq-install">Does it install JDKs, or only switch between ones I already have?</h3></summary>
+    <p>It installs them. <code>jolta install 21</code> fetches a JDK, and pinning a version you
 don't have downloads it on first use, so entering a directory never blocks on the network.
 It also finds JDKs you installed elsewhere (Homebrew, <code>/Library/Java</code>, SDKMAN,
 <code>Program Files</code>) and can use those instead of downloading a second copy.</p>
-
-<h3 id="faq-monorepo">Can different modules in one repository use different JDKs?</h3>
-<p>Yes. The nearest pin wins: <code>.java-version</code> is resolved by walking up from the
+  </details>
+  <details>
+    <summary><h3 id="faq-monorepo">Can different modules in one repository use different JDKs?</h3></summary>
+    <p>Yes. The nearest pin wins: <code>.java-version</code> is resolved by walking up from the
 current directory, so a repository can pin 21 at the root and 17 in one module, and each
 directory gets its own JDK.</p>
-
-<h3 id="faq-sdkmanrc">I already have <code>.sdkmanrc</code> files. Do I have to convert them?</h3>
-<p>No. jolta reads <code>.sdkmanrc</code> as well as <code>.java-version</code>, so existing
+  </details>
+  <details>
+    <summary><h3 id="faq-sdkmanrc">I already have <code>.sdkmanrc</code> files. Do I have to convert them?</h3></summary>
+    <p>No. jolta reads <code>.sdkmanrc</code> as well as <code>.java-version</code>, so existing
 repositories keep working and you don't need the whole team to switch first. Where both exist
 in the same directory, <code>.java-version</code> wins.</p>
-
-<h3 id="faq-intellij">Does it work with IntelliJ IDEA?</h3>
-<p>Yes. There's a plugin that reads the same <code>.java-version</code> and sets the Project
+  </details>
+  <details>
+    <summary><h3 id="faq-intellij">Does it work with IntelliJ IDEA?</h3></summary>
+    <p>Yes. There's a plugin that reads the same <code>.java-version</code> and sets the Project
 SDK, the Gradle JVM and the Maven importer JDK from it, with nothing to configure. It follows
 along live, so pinning a new version in a terminal switches the IDE within seconds without a
 restart or re-import.</p>
-
-<h3 id="faq-windows">Does it work on Windows?</h3>
-<p>Yes. Setup adds the shims to your user <code>PATH</code> in the registry and installs the
+  </details>
+  <details>
+    <summary><h3 id="faq-windows">Does it work on Windows?</h3></summary>
+    <p>Yes. Setup adds the shims to your user <code>PATH</code> in the registry and installs the
 <code>JAVA_HOME</code> hook into your PowerShell profiles. Installation is currently a zip
 download and <code>.\jolta.exe setup</code>; a winget package is submitted and awaiting review.</p>
-
-<h3 id="faq-uninstall">How do I remove it?</h3>
-<p><code>jolta implode</code> removes <code>~/.jolta</code> and the jolta lines from your shell
+  </details>
+  <details>
+    <summary><h3 id="faq-uninstall">How do I remove it?</h3></summary>
+    <p><code>jolta implode</code> removes <code>~/.jolta</code> and the jolta lines from your shell
 profile, after a confirmation that lists exactly which JDKs will be deleted. JDKs you installed
 outside jolta are never touched.</p>
+  </details>
+</div>
 
 <h2 id="manual">Everything else</h2>
 <p>Commands, pinning semantics, distros, mirrors, and the JAVA_HOME story live in

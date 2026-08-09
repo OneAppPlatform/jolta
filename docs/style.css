@@ -98,3 +98,20 @@ td.m { color: var(--accent2); }
   .sidebar { position: static; max-height: none; columns: 2; padding-bottom: 0; }
   .sidebar .group { break-after: avoid; }
 }
+
+/* ---- FAQ accordion ---- */
+.faq { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.faq details + details { border-top: 1px solid var(--border); }
+.faq summary { cursor: pointer; padding: 14px 18px; list-style: none;
+  display: flex; align-items: center; gap: 10px; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary:hover { background: var(--hero-bg); }
+.faq summary h3 { margin: 0; font-size: 1rem; display: inline; flex: 1; }
+/* chevron drawn in CSS so there's no icon font or SVG to load */
+.faq summary::after { content: ""; width: 8px; height: 8px; flex: none;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg); transition: transform .15s ease; margin-right: 2px; }
+.faq details[open] summary::after { transform: rotate(45deg); }
+.faq details[open] summary { background: var(--hero-bg); }
+.faq details > p { margin: 0; padding: 2px 18px 16px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .faq summary::after { transition: none; } }
