@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-    <img src="assets/logo.png" alt="Jolta — the hands-off Java version manager" width="480">
+    <img src="assets/logo.png" alt="Jolta — best in class Java version manager" width="480">
   </picture>
 </p>
 
