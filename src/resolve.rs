@@ -544,20 +544,55 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
                 remember_pin(&pin.source, &spec);
             }
             let home = home.unwrap_or_else(|| {
+                let all = list_all();
                 let installed: Vec<String> = {
-                    let mut vs: Vec<String> = list_all()
-                        .into_iter()
-                        .map(|(v, h)| match vendor_of(&h) {
+                    let mut vs: Vec<String> = all
+                        .iter()
+                        .map(|(v, h)| match vendor_of(h) {
                             Some(ven) => format!("{ven}-{v}"),
-                            None => v,
+                            None => v.clone(),
                         })
                         .collect();
                     vs.sort();
                     vs.dedup();
                     vs
                 };
+                // The near miss is the sentence the reader actually needs, and
+                // it belongs in the DEFAULT failure — not behind --explain,
+                // which nobody types before they know they need it. An exact
+                // pin against a build one release away is the case where
+                // "here is what's installed" reads as a taunt rather than help.
+                let (want_vendor, want_version) = parse_spec(&spec);
+                let near: Vec<String> = major_of(&want_version)
+                    .filter(|_| is_exact(&want_version))
+                    .map(|major| {
+                        let mut n: Vec<String> = all
+                            .iter()
+                            // A spec that names a distro is not "one build off"
+                            // from another distro — that one missed for a
+                            // different reason, and saying otherwise misleads.
+                            .filter(|(_, h)| want_vendor.is_none_or(|w| vendor_of(h) == Some(w)))
+                            .filter(|(v, _)| major_of(v) == Some(major) && numkey(v) != numkey(&want_version))
+                            .map(|(v, h)| match vendor_of(h) {
+                                Some(ven) => format!("{ven}-{v}"),
+                                None => v.clone(),
+                            })
+                            .collect();
+                        n.sort();
+                        n.dedup();
+                        n
+                    })
+                    .unwrap_or_default();
+                let closest = if near.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n  same major, different build: {} — '{spec}' is exact, so none of these can satisfy it",
+                        near.join(" ")
+                    )
+                };
                 die(&format!(
-                    "no installed JDK matches '{spec}' (pinned by {})\n  installed JDKs: {}\n  \
+                    "no installed JDK matches '{spec}' (pinned by {})\n  installed JDKs: {}{closest}\n  \
                      run 'jolta install {spec}' to download it, or 'jolta list' to see what's available",
                     pin.source,
                     installed.join(" ")

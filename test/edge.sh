@@ -1784,6 +1784,28 @@ else
 fi
 rm -rf "$JOLTA_HOME/jdks/temurin-86.0.1"
 
+# --- the near miss belongs in the DEFAULT failure, not behind a flag ---
+# 87.0.7 exists as temurin and corretto; pin an exact build that doesn't.
+printf '87.0.6\n' > .java-version
+jolta_rc jolta current
+check_rc "exact near-miss pin fails" nonzero "$rc"
+check "default error names the near miss" "same major, different build" "$out"
+check "default error lists the close build" "87.0.7" "$out"
+check "default error explains exactness" "is exact" "$out"
+
+# a distro-scoped pin must not blame builds of another distro
+printf 'temurin@87.0.6\n' > .java-version
+jolta_rc jolta current
+# assert on the near-miss LINE only: the full installed list names every distro
+nearline=$(printf '%s\n' "$out" | grep 'same major')
+check "near miss respects the pinned distro" "temurin-87.0.7" "$nearline"
+check_not "near miss excludes other distros" "corretto-87.0.7" "$nearline"
+
+# a major pin has no exactness to explain — the line must not appear
+printf '79\n' > .java-version
+jolta_rc jolta current
+check_not "major pin claims no exactness" "is exact" "$out"
+
 cd "$work"
 
 # =================================================================
