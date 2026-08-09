@@ -16,6 +16,16 @@ use crate::ui::{die, paint};
 /// unreachable but downloads still work (e.g. JOLTA_DOWNLOAD_BASE mirrors).
 pub const FALLBACK_LTS: u32 = 25;
 
+/// An installed JDK that was considered and not chosen, with the reason.
+/// Only ever collected when the caller explicitly asks (`--explain`): the
+/// resolution path runs on every shim exec, so it allocates nothing here.
+pub struct Rejection {
+    pub version: String,
+    pub vendor: Option<String>,
+    pub home: PathBuf,
+    pub reason: String,
+}
+
 /// Best home for a spec: filter by major (and distro when the spec names one,
 /// e.g. "corretto-21"); exact full-version match wins, else highest build.
 /// Managed JDKs come first in `candidates`, matching the sh implementation.
@@ -26,6 +36,49 @@ pub fn best_match(
     version: &str,
     preferred: Option<&str>,
 ) -> Option<PathBuf> {
+    best_match_inner(candidates, vendor, major, version, preferred, None)
+}
+
+/// Same walk as `best_match`, plus every candidate it passed over and why.
+/// Deliberately the SAME function rather than a parallel one: an explanation
+/// reconstructed by a second code path can drift from the decision it claims
+/// to describe, and then you are debugging the explainer.
+pub fn explain_match(
+    candidates: &[(String, PathBuf)],
+    vendor: Option<&str>,
+    major: u32,
+    version: &str,
+    preferred: Option<&str>,
+) -> (Option<PathBuf>, Vec<Rejection>) {
+    let mut rejected = Vec::new();
+    let home = best_match_inner(candidates, vendor, major, version, preferred, Some(&mut rejected));
+    (home, rejected)
+}
+
+fn best_match_inner(
+    candidates: &[(String, PathBuf)],
+    vendor: Option<&str>,
+    major: u32,
+    version: &str,
+    preferred: Option<&str>,
+    mut explain: Option<&mut Vec<Rejection>>,
+) -> Option<PathBuf> {
+    // Records a skipped candidate; a no-op (and no allocation) when the caller
+    // didn't ask for an explanation.
+    macro_rules! reject {
+        ($v:expr, $home:expr, $reason:expr) => {
+            if let Some(out) = explain.as_deref_mut() {
+                out.push(Rejection {
+                    version: $v.clone(),
+                    vendor: vendor_of($home).map(str::to_string),
+                    home: $home.clone(),
+                    reason: $reason,
+                });
+            }
+        };
+    }
+    // Everything that survived filtering, to label after a winner is known.
+    let mut considered: Vec<(&String, &PathBuf)> = Vec::new();
     // Precedence for vendorless specs, ONE ladder shared by every consumer
     // (shims, which/home/current, list, prune, auto-install):
     //   preferred-vendor GA > any GA > preferred-vendor EA > any EA,
@@ -43,16 +96,22 @@ pub fn best_match(
     let mut exact_pref: Option<&PathBuf> = None;
     for (v, home) in candidates {
         if major_of(v) != Some(major) {
+            reject!(v, home, format!("Java {} — spec asks for {major}", major_of(v).map_or("?".into(), |m| m.to_string())));
             continue;
         }
         if let Some(want) = vendor {
             if vendor_of(home) != Some(want) {
+                reject!(v, home, format!("distro is not '{want}' (spec names a distro)"));
                 continue;
             }
         }
         let is_ea = v.contains("-ea");
         if want_ea && !is_ea {
+            reject!(v, home, "spec asks for an early-access build; this is GA".to_string());
             continue;
+        }
+        if explain.is_some() {
+            considered.push((v, home));
         }
         let is_pref = vendor.is_none() && preferred.is_some() && vendor_of(home) == preferred;
         // Exact matches compare numerically, so "21.0.2+13" == "21.0.2" and
@@ -79,12 +138,60 @@ pub fn best_match(
         }
     }
     // An exact spec means exact: never satisfy "21.0.2" with some other 21.x
-    if is_exact(version) {
-        return exact_pref.or(exact).cloned();
+    let winner = if is_exact(version) {
+        exact_pref.or(exact).cloned()
+    } else {
+        // A major pin picks the highest build within the winning tier; the
+        // bare-GA "21" release must not shadow 21.0.x (mise #1887).
+        best_pref.or(best).or(best_pref_ea).or(best_ea).map(|(_, h)| h.clone())
+    };
+    // Label the survivors that lost. The near-miss case matters most: an exact
+    // pin against a JDK one point release away resolves to nothing, and "there
+    // is a 17.0.19 here" is the sentence the user actually needs.
+    if explain.is_some() {
+        let win_vendor = winner.as_deref().and_then(vendor_of);
+        for (v, home) in considered {
+            if Some(home) == winner.as_ref() {
+                continue;
+            }
+            let reason = if is_exact(version) && numkey(v) != numkey(version) {
+                format!("not {version} — spec is exact, so a different build of {major} cannot satisfy it")
+            } else if winner.is_none() {
+                "no candidate satisfied the spec".to_string()
+            } else if vendor.is_none()
+                && preferred.is_some()
+                && win_vendor == preferred
+                && vendor_of(home) != preferred
+            {
+                format!(
+                    "distro '{}' loses to preferred distro '{}' (JOLTA_VENDOR / jolta vendor)",
+                    vendor_of(home).unwrap_or("?"),
+                    preferred.unwrap_or("?")
+                )
+            } else if let Some(w) = winner.as_ref().and_then(|h| version_at(candidates, h)) {
+                if numkey(v) == numkey(w) {
+                    // Same build, different distro: `best_match` keeps the
+                    // EARLIER candidate, and managed JDKs are listed first.
+                    format!(
+                        "same build as the selected {} {w} — ties go to the earlier candidate (jolta-managed JDKs are considered first)",
+                        win_vendor.unwrap_or("?")
+                    )
+                } else {
+                    format!("build {v} is older than the selected {w}")
+                }
+            } else {
+                "outranked by the selected build".to_string()
+            };
+            reject!(v, home, reason);
+        }
     }
-    // A major pin picks the highest build within the winning tier; the
-    // bare-GA "21" release must not shadow 21.0.x (mise #1887).
-    best_pref.or(best).or(best_pref_ea).or(best_ea).map(|(_, h)| h.clone())
+    winner
+}
+
+/// The version string `candidates` carries for a home — used only to name the
+/// winner in an explanation.
+fn version_at<'a>(candidates: &'a [(String, PathBuf)], home: &PathBuf) -> Option<&'a str> {
+    candidates.iter().find(|(_, h)| h == home).map(|(v, _)| v.as_str())
 }
 
 fn cache_path(spec: &str) -> PathBuf {
@@ -129,6 +236,65 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
         let _ = fs::write(&cache, format!("{}\n", home.display()));
     }
     Some(home)
+}
+
+/// Resolution for the current directory, plus every installed JDK the walk
+/// passed over and why. Opt-in only (`--explain`): it deliberately BYPASSES
+/// the resolution cache, because a cache hit performs no walk — and an
+/// explanation of a walk that never happened is fiction, not evidence.
+/// Identity of the candidate set a decision was made against. A rejection is
+/// only evidence if the universe it was rejected from is named: install or
+/// remove a JDK and the same spec can produce a different — equally correct —
+/// explanation, with nothing in the output to mark that the ground moved.
+/// (Raised by @cwahq on Moltbook: "rejected candidates are evidence only when
+/// the universe they were rejected from is named too.")
+pub struct Inventory {
+    pub count: usize,
+    pub digest: String,
+}
+
+fn inventory_id(candidates: &[(String, PathBuf)]) -> Inventory {
+    let mut keys: Vec<String> =
+        candidates.iter().map(|(v, h)| format!("{v}|{}", h.display())).collect();
+    keys.sort(); // order of discovery must not change the identity
+    let mut h: u64 = 5381;
+    for k in &keys {
+        for b in k.bytes() {
+            h = h.wrapping_mul(33) ^ b as u64;
+        }
+    }
+    Inventory { count: candidates.len(), digest: format!("{h:016x}") }
+}
+
+pub struct Explanation {
+    pub pin: Pin,
+    pub home: Option<PathBuf>,
+    pub rejected: Vec<Rejection>,
+    pub inventory: Inventory,
+    pub resolver: &'static str,
+}
+
+pub fn explain_current() -> Explanation {
+    let pin = read_pin();
+    let candidates = list_all();
+    let inventory = inventory_id(&candidates);
+    let resolver = env!("CARGO_PKG_VERSION");
+    let Some(spec) = pin.spec.clone() else {
+        return Explanation {
+            pin,
+            home: system_default(),
+            rejected: Vec::new(),
+            inventory,
+            resolver,
+        };
+    };
+    let (vendor, version) = parse_spec(&spec);
+    let Some(major) = major_of(&version) else {
+        return Explanation { pin, home: None, rejected: Vec::new(), inventory, resolver };
+    };
+    let (home, rejected) =
+        explain_match(&candidates, vendor, major, &version, crate::jdk::preferred_vendor());
+    Explanation { pin, home: home.filter(|h| has_java(h)), rejected, inventory, resolver }
 }
 
 /// "java=21.0.2-tem" -> ("temurin@21.0.2", "21.0.2-tem"): the jolta spec, plus

@@ -121,7 +121,7 @@ fn main() {
         "list" | "ls" => cmd_list(&rest),
         "jdks" => cmd_jdks(),
         "current" => cmd_current(&rest),
-        "which" => cmd_which(rest.first().map(String::as_str).unwrap_or("java")),
+        "which" => cmd_which(&rest),
         "exec" => {
             if rest.is_empty() {
                 die("usage: jolta exec <command> [args...]");

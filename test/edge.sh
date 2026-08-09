@@ -1722,6 +1722,71 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 
 # =================================================================
+section "S. --explain: why this JDK, and what lost"
+# =================================================================
+# The contract is two-sided: the explanation must be complete when asked for,
+# and completely absent when not. 87.0.7 exists as both temurin and corretto,
+# which is the case where a correct answer is least self-evident.
+
+mkdir -p "$work/s" && cd "$work/s"
+
+# --- opt-in: the default paths must not gain a field or a line ---
+printf 'temurin@87\n' > .java-version
+check_not "plain --json has no rejected key" '"rejected"' "$(jolta current --json 2>&1)"
+check_not "plain current says nothing about losers" "passed over" "$(jolta current 2>&1)"
+
+# --- asked for: the distro that lost, and why ---
+jolta_rc jolta current --explain
+check "explain lists passed-over JDKs" "passed over" "$out"
+check "explain names the rejected distro build" "87.0.7" "$out"
+check "explain gives the distro reason" "distro is not 'temurin'" "$out"
+check "--json --explain carries rejected" '"rejected"' "$(jolta current --json --explain 2>&1)"
+check "rejected entries carry a reason" '"reason"' "$(jolta current --json --explain 2>&1)"
+
+# --- wrong major is reported as such, not silently dropped ---
+printf '97\n' > .java-version
+jolta_rc jolta current --explain
+check "explain reports majors that don't apply" "spec asks for 97" "$out"
+
+# --- the near miss: nothing matches, but something close is installed ---
+# Without --explain this is a bare "no match" and the user reconstructs by hand.
+printf '87.0.6\n' > .java-version
+jolta_rc jolta current --explain
+check_rc "near-miss exact pin still fails" nonzero "$rc"
+check "near miss names the installed build" "87.0.7" "$out"
+check "near miss explains exactness" "spec is exact" "$out"
+check "near miss still suggests the install" "jolta install 87.0.6" "$out"
+
+# --- which --explain adds provenance without changing its first line ---
+printf 'temurin@87\n' > .java-version
+check "which --explain keeps the path first" "$(jolta which 2>&1)" "$(jolta which --explain 2>&1)"
+check "which --explain names the pin source" ".java-version" "$(jolta which --explain 2>&1)"
+check "which --explain lists losers" "passed over" "$(jolta which --explain 2>&1)"
+check "which --explain still accepts a tool arg" "javac" "$(jolta which javac --explain 2>&1)"
+
+# --- provenance: an explanation must name the universe it was made in ---
+printf 'temurin@87\n' > .java-version
+check "explain names the inventory size" "considered" "$(jolta current --explain 2>&1)"
+check "explain names the resolver version" "resolver" "$(jolta current --explain 2>&1)"
+check "json carries an inventory digest" '"digest"' "$(jolta current --json --explain 2>&1)"
+check "json carries the resolver version" '"resolver"' "$(jolta current --json --explain 2>&1)"
+# same candidate set must produce the same identity, twice running
+d1=$(jolta current --json --explain 2>&1)
+d2=$(jolta current --json --explain 2>&1)
+check_eq "inventory digest is stable across runs" "$d1" "$d2"
+# and a changed universe must produce a different one
+mk_jdk temurin-86.0.1 86.0.1 "Eclipse Adoptium" >/dev/null 2>&1
+d3=$(jolta current --json --explain 2>&1)
+if [ "$d1" = "$d3" ]; then
+  bad "inventory digest changes when a JDK appears" "     digest unchanged after installing 86.0.1"
+else
+  ok "inventory digest changes when a JDK appears"
+fi
+rm -rf "$JOLTA_HOME/jdks/temurin-86.0.1"
+
+cd "$work"
+
+# =================================================================
 echo
 echo "passed: $pass, failed: $fail"
 if [ "$fail" -gt 0 ]; then

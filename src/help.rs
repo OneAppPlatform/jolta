@@ -317,28 +317,36 @@ pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "current",
         summary: "show the Java version resolved here",
-        usage: &["jolta current [--json]"],
+        usage: &["jolta current [--json] [--explain]"],
         aliases: &[],
         about: &[
             "Prints the version, distro, and home of the JDK a java command would \
              use in the current directory — plus which pin selected it (a \
              project's .java-version, the global default, or the system JDK). \
              --json emits the same as one object.",
+            "--explain also lists every installed JDK that was passed over and \
+             why: wrong major, wrong distro, older build, or — most usefully — \
+             an exact pin that a near-miss build cannot satisfy. It re-resolves \
+             with the cache bypassed, so it costs more than a plain lookup and \
+             is never done unless you ask.",
         ],
         examples: &[
             ("jolta current", ""),
             ("jolta current --json", "{\"version\": ..., \"home\": ...}"),
+            ("jolta current --explain", "why this JDK, and what lost"),
         ],
     },
     HelpPage {
         name: "which",
         summary: "show the real binary a shim would exec",
-        usage: &["jolta which [<tool>]"],
+        usage: &["jolta which [<tool>] [--explain]"],
         aliases: &[],
         about: &[
             "Prints the full path inside the resolved JDK that the shim would exec \
              for <tool> (default: java). Useful to double-check what a build is \
              really running, or to hand a tool path to an IDE.",
+            "--explain adds the pin that selected it and every installed JDK the \
+             walk passed over, with a reason for each.",
         ],
         examples: &[
             ("jolta which", "path of the resolved java"),

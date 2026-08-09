@@ -603,11 +603,45 @@ pub fn cmd_jdks() {
     }
 }
 
+/// `"rejected": [...]` — the JDKs the walk passed over. Only ever built when
+/// --explain is present, so the default path stays a single flat object.
+fn rejected_json(rejected: &[crate::resolve::Rejection]) -> String {
+    let items: Vec<String> = rejected
+        .iter()
+        .map(|r| {
+            format!(
+                "{{\"version\": {}, \"vendor\": {}, \"home\": {}, \"reason\": {}}}",
+                json_str(&r.version),
+                r.vendor.as_deref().map_or("null".to_string(), json_str),
+                json_str(&r.home.display().to_string()),
+                json_str(&r.reason)
+            )
+        })
+        .collect();
+    format!("[{}]", items.join(", "))
+}
+
 pub fn cmd_current(rest: &[String]) {
+    let json = rest.iter().any(|a| a == "--json");
+    let explain = rest.iter().any(|a| a == "--explain");
+    // --explain re-walks with the cache bypassed; without it, nothing changes.
+    let ex = if explain {
+        let ex = crate::resolve::explain_current();
+        // The near miss is the whole point: when nothing satisfies an exact
+        // pin, "17.0.19 is here and it is one release off" is the sentence the
+        // user needs — and resolve_current would die before ever printing it.
+        if ex.home.is_none() && !ex.rejected.is_empty() {
+            explain_no_match(&ex, json);
+        }
+        Some(ex)
+    } else {
+        None
+    };
     let r = resolve_current(false);
-    if rest.iter().any(|a| a == "--json") {
+    if json {
+        let tail = ex.as_ref().map(provenance_json).unwrap_or_default();
         println!(
-            "{{\"version\": {}, \"vendor\": {}, \"home\": {}, \"source\": {}}}",
+            "{{\"version\": {}, \"vendor\": {}, \"home\": {}, \"source\": {}{tail}}}",
             version_of(&r.home).as_deref().map_or("null".to_string(), json_str),
             vendor_of(&r.home).map_or("null".to_string(), json_str),
             json_str(&r.home.display().to_string()),
@@ -619,15 +653,99 @@ pub fn cmd_current(rest: &[String]) {
     let vendor = vendor_of(&r.home).map(|s| format!(" ({s})")).unwrap_or_default();
     println!("{}{} {}", bold(&v), cyan(&vendor), dim(&format!("(from {})", r.source)));
     println!("{}", r.home.display());
+    if let Some(ex) = &ex {
+        print_rejected(&ex.rejected);
+        print_provenance(ex);
+    }
 }
 
-pub fn cmd_which(tool: &str) {
+/// Nothing matched the pin, but JDKs were considered. Report what was here and
+/// why each one missed, then exit — this is the case a bare "no match" error
+/// leaves the user to reconstruct by hand.
+fn explain_no_match(ex: &crate::resolve::Explanation, json: bool) -> ! {
+    let spec = ex.pin.spec.as_deref().unwrap_or("?");
+    if json {
+        println!(
+            "{{\"version\": null, \"vendor\": null, \"home\": null, \"source\": {}, \"spec\": {}{}}}",
+            json_str(&ex.pin.source),
+            json_str(spec),
+            provenance_json(ex)
+        );
+        std::process::exit(1);
+    }
+    eprintln!(
+        "{} no installed JDK matches '{spec}' (pinned by {})",
+        crate::ui::paint("31", "jolta:", true),
+        ex.pin.source
+    );
+    print_rejected(&ex.rejected);
+    print_provenance(ex);
+    eprintln!("\n  run 'jolta install {spec}' to download it");
+    std::process::exit(1);
+}
+
+/// The rejected set plus the identity of the universe it was rejected from.
+/// Without the inventory digest and resolver version, the same spec can yield
+/// a different explanation later and nothing marks that the ground moved.
+fn provenance_json(ex: &crate::resolve::Explanation) -> String {
+    format!(
+        ", \"rejected\": {}, \"inventory\": {{\"count\": {}, \"digest\": {}}}, \"resolver\": {}",
+        rejected_json(&ex.rejected),
+        ex.inventory.count,
+        json_str(&ex.inventory.digest),
+        json_str(ex.resolver)
+    )
+}
+
+fn print_provenance(ex: &crate::resolve::Explanation) {
+    println!(
+        "{}",
+        dim(&format!(
+            "considered {} installed JDK(s) · inventory {} · resolver {}",
+            ex.inventory.count, ex.inventory.digest, ex.resolver
+        ))
+    );
+}
+
+/// The losing candidates in prose. Silence when nothing was passed over is
+/// deliberate: "considered 0 alternatives" is noise, not evidence.
+fn print_rejected(rejected: &[crate::resolve::Rejection]) {
+    if rejected.is_empty() {
+        return;
+    }
+    println!("\n{}", dim("passed over:"));
+    for r in rejected {
+        println!(
+            "  {:<12} {:<11} {}",
+            r.version,
+            r.vendor.as_deref().unwrap_or("?"),
+            dim(&r.reason)
+        );
+    }
+}
+
+pub fn cmd_which(rest: &[String]) {
+    let explain = rest.iter().any(|a| a == "--explain");
+    let tool = rest.iter().find(|a| !a.starts_with("--")).map_or("java", |s| s.as_str());
     let r = resolve_current(false);
     let bin = tool_bin(&r.home, tool);
     if !bin.is_file() {
         die(&format!("'{tool}' not found in {}", r.home.display()));
     }
     println!("{}", bin.display());
+    if explain {
+        let ex = crate::resolve::explain_current();
+        println!(
+            "{}",
+            dim(&format!(
+                "selected {} via {}",
+                version_of(&r.home).unwrap_or_else(|| "unknown".into()),
+                ex.pin.source
+            ))
+        );
+        print_rejected(&ex.rejected);
+        print_provenance(&ex);
+    }
 }
 
 pub fn cmd_exec(argv: &[String]) -> ! {
