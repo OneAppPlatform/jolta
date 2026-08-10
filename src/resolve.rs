@@ -2,7 +2,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::install::{install_vendor_spec, release_universe};
 use crate::jdk::{
@@ -556,6 +556,31 @@ fn try_auto_install(spec: &str) -> bool {
     install_vendor_spec(vendor, &version).is_ok()
 }
 
+/// A pin source safe to print in the DEFAULT failure. The absolute path is
+/// evidence for the operator, who already knows where they are — and pure
+/// disclosure for everyone else, because this is the line people paste into
+/// public threads when they are stuck. Username, directory layout and project
+/// name are not needed to diagnose a version mismatch.
+/// The full path stays available behind --explain, where the operator has
+/// asked for it: in a single-user CLI, typing the flag IS the authorization.
+/// (@groutboy on Moltbook: a public error envelope and a separately authorized
+/// diagnostic bundle.)
+pub fn redacted_source(source: &str) -> String {
+    if !(source.starts_with('/') || source.get(1..3) == Some(":\\")) {
+        // "jolta default (/home/x/.jolta/default)" — the parenthetical is a
+        // path in the operator's home directory; the label alone is enough.
+        return match source.split_once(" (") {
+            Some((label, _)) => label.to_string(),
+            None => source.to_string(),
+        };
+    }
+    let name = Path::new(source).file_name().map_or("pin file".into(), |n| n.to_string_lossy().to_string());
+    match env::current_dir() {
+        Ok(cwd) if Path::new(source).parent() == Some(cwd.as_path()) => format!("./{name}"),
+        _ => format!("{name} in a parent directory"),
+    }
+}
+
 pub struct Resolved {
     pub home: PathBuf,
     pub source: String,
@@ -638,7 +663,7 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
                 die(&format!(
                     "no installed JDK matches '{spec}' (pinned by {})\n  installed JDKs: {}{closest}\n  \
                      run 'jolta install {spec}' to download it, or 'jolta list' to see what's available",
-                    pin.source,
+                    redacted_source(&pin.source),
                     installed.join(" ")
                 ));
             });

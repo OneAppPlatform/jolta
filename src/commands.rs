@@ -677,7 +677,7 @@ fn explain_no_match(ex: &crate::resolve::Explanation, json: bool) -> ! {
     eprintln!(
         "{} no installed JDK matches '{spec}' (pinned by {})",
         crate::ui::paint("31", "jolta:", true),
-        ex.pin.source
+        ex.pin.source          // --explain: operator asked, full path is the point
     );
     print_rejected(&ex.rejected);
     print_provenance(ex);

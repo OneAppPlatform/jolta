@@ -456,7 +456,14 @@ check "missing-tool error names the tool and JDK" "megatool" "$out"
 
 printf '90\n' > .java-version   # nothing installed for 90
 jolta_rc java -version
-check "resolution error cites the pin file" "$work/d/.java-version" "$out"
+# The default failure is a PUBLIC envelope: it names the pin file but must not
+# leak the absolute path, which carries username, directory layout and project
+# name into every paste. The full path stays behind --explain, where the
+# operator has asked for it.
+check "resolution error cites the pin file" ".java-version" "$out"
+check_not "default error hides the absolute path" "$work/d/.java-version" "$out"
+# separate capture: jolta_rc would clobber $out for the assertions below
+check "--explain does show the absolute path" "$work/d/.java-version" "$(jolta current --explain 2>&1)"
 check "resolution error suggests jolta install" "jolta install" "$out"
 check "resolution error lists installed JDKs" "temurin-97.0.1" "$out"
 echo 97 > .java-version
