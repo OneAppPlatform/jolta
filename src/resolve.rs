@@ -251,19 +251,58 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
 pub struct Inventory {
     pub count: usize,
     pub digest: String,
+    /// What entered and left since the last --explain. A digest tells you the
+    /// footing moved; only a diff tells you which way. (@groutboy on Moltbook:
+    /// "the hash is the gate, the diff is the thing an operator can act on.")
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    /// True the first time we ever look. Nothing to diff against, and calling
+    /// every JDK on the machine "added" would be a lie dressed as a report.
+    pub first_seen: bool,
 }
 
-fn inventory_id(candidates: &[(String, PathBuf)]) -> Inventory {
-    let mut keys: Vec<String> =
-        candidates.iter().map(|(v, h)| format!("{v}|{}", h.display())).collect();
+fn inventory_keys(candidates: &[(String, PathBuf)]) -> Vec<String> {
+    let mut keys: Vec<String> = candidates
+        .iter()
+        .map(|(v, h)| match vendor_of(h) {
+            Some(ven) => format!("{ven}-{v}"),
+            None => v.clone(),
+        })
+        .collect();
     keys.sort(); // order of discovery must not change the identity
+    keys.dedup();
+    keys
+}
+
+/// Identity plus drift. The snapshot lives beside the caches and is refreshed
+/// here, so a change is reported ONCE and the new state becomes the baseline —
+/// re-running --explain immediately after shows no diff. That is a tripwire,
+/// not a log; if you need the history, keep the output.
+fn inventory_id(candidates: &[(String, PathBuf)]) -> Inventory {
+    let keys = inventory_keys(candidates);
     let mut h: u64 = 5381;
     for k in &keys {
         for b in k.bytes() {
             h = h.wrapping_mul(33) ^ b as u64;
         }
     }
-    Inventory { count: candidates.len(), digest: format!("{h:016x}") }
+    let snap = jolta_home().join("inventory");
+    let previous: Option<Vec<String>> = fs::read_to_string(&snap)
+        .ok()
+        .map(|t| t.lines().filter(|l| !l.is_empty()).map(str::to_string).collect());
+    let (added, removed, first_seen) = match &previous {
+        None => (Vec::new(), Vec::new(), true),
+        Some(prev) => (
+            keys.iter().filter(|k| !prev.contains(k)).cloned().collect(),
+            prev.iter().filter(|k| !keys.contains(k)).cloned().collect(),
+            false,
+        ),
+    };
+    if previous.as_deref() != Some(keys.as_slice()) {
+        let _ = fs::create_dir_all(jolta_home());
+        let _ = fs::write(&snap, format!("{}\n", keys.join("\n")));
+    }
+    Inventory { count: candidates.len(), digest: format!("{h:016x}"), added, removed, first_seen }
 }
 
 pub struct Explanation {

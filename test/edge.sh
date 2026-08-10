@@ -1784,6 +1784,21 @@ else
 fi
 rm -rf "$JOLTA_HOME/jdks/temurin-86.0.1"
 
+# --- drift: the digest is the gate, the diff is what an operator can act on ---
+printf 'temurin@87\n' > .java-version
+jolta current --explain >/dev/null 2>&1          # establish a baseline
+jolta_rc jolta current --explain
+check_not "no drift reported when nothing changed" "changed since last check" "$out"
+mk_jdk temurin-85.0.1 85.0.1 "Eclipse Adoptium"
+jolta_rc jolta current --explain
+check "an appearing JDK is reported" "+temurin-85.0.1" "$out"
+jolta_rc jolta current --explain
+check_not "drift is a tripwire, not a log" "changed since last check" "$out"
+rm -rf "$JOLTA_HOME/jdks/temurin-85.0.1"
+jolta_rc jolta current --explain
+check "a disappearing JDK is reported" "-temurin-85.0.1" "$out"
+check "json exposes first_seen" '"first_seen"' "$(jolta current --json --explain 2>&1)"
+
 # --- the near miss belongs in the DEFAULT failure, not behind a flag ---
 # 87.0.7 exists as temurin and corretto; pin an exact build that doesn't.
 printf '87.0.6\n' > .java-version
