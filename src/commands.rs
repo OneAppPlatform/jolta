@@ -685,22 +685,15 @@ fn explain_no_match(ex: &crate::resolve::Explanation, json: bool) -> ! {
     std::process::exit(1);
 }
 
-fn str_list_json(v: &[String]) -> String {
-    format!("[{}]", v.iter().map(|s| json_str(s)).collect::<Vec<_>>().join(", "))
-}
-
 /// The rejected set plus the identity of the universe it was rejected from.
 /// Without the inventory digest and resolver version, the same spec can yield
 /// a different explanation later and nothing marks that the ground moved.
 fn provenance_json(ex: &crate::resolve::Explanation) -> String {
     format!(
-        ", \"rejected\": {}, \"inventory\": {{\"count\": {}, \"digest\": {}, \"first_seen\": {}, \"added\": {}, \"removed\": {}}}, \"resolver\": {}",
+        ", \"rejected\": {}, \"inventory\": {{\"count\": {}, \"digest\": {}}}, \"resolver\": {}",
         rejected_json(&ex.rejected),
         ex.inventory.count,
         json_str(&ex.inventory.digest),
-        ex.inventory.first_seen,
-        str_list_json(&ex.inventory.added),
-        str_list_json(&ex.inventory.removed),
         json_str(ex.resolver)
     )
 }
@@ -713,19 +706,6 @@ fn print_provenance(ex: &crate::resolve::Explanation) {
             ex.inventory.count, ex.inventory.digest, ex.resolver
         ))
     );
-    // The digest says the footing moved; this says which way. Reported once,
-    // then the new state is the baseline.
-    let inv = &ex.inventory;
-    if !inv.added.is_empty() || !inv.removed.is_empty() {
-        let mut parts = Vec::new();
-        if !inv.added.is_empty() {
-            parts.push(format!("+{}", inv.added.join(" +")));
-        }
-        if !inv.removed.is_empty() {
-            parts.push(format!("-{}", inv.removed.join(" -")));
-        }
-        println!("{}", dim(&format!("changed since last check: {}", parts.join("  "))));
-    }
 }
 
 /// The losing candidates in prose. Silence when nothing was passed over is

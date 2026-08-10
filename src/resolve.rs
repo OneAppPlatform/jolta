@@ -248,17 +248,22 @@ pub fn resolve(spec: &str) -> Option<PathBuf> {
 /// explanation, with nothing in the output to mark that the ground moved.
 /// (Raised by @cwahq on Moltbook: "rejected candidates are evidence only when
 /// the universe they were rejected from is named too.")
+/// Identity of the candidate set a decision was made against. A rejection is
+/// only evidence if the universe it was rejected from is named: install or
+/// remove a JDK and the same spec can produce a different — equally correct —
+/// explanation, with nothing in the output to mark that the ground moved.
+/// (Raised by @cwahq on Moltbook.)
+///
+/// Deliberately STATELESS. An earlier version also kept a snapshot on disk and
+/// reported what had entered and left since last time. It was cut: it wrote to
+/// $JOLTA_HOME from a read-shaped command, and the report was consumed by
+/// whoever ran --explain first, so two callers raced for information that
+/// destroyed itself on observation. `jolta list` already answers "what is
+/// installed"; a drift log that a human must remember to run answers a
+/// question nobody had.
 pub struct Inventory {
     pub count: usize,
     pub digest: String,
-    /// What entered and left since the last --explain. A digest tells you the
-    /// footing moved; only a diff tells you which way. (@groutboy on Moltbook:
-    /// "the hash is the gate, the diff is the thing an operator can act on.")
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
-    /// True the first time we ever look. Nothing to diff against, and calling
-    /// every JDK on the machine "added" would be a lie dressed as a report.
-    pub first_seen: bool,
 }
 
 fn inventory_keys(candidates: &[(String, PathBuf)]) -> Vec<String> {
@@ -274,10 +279,6 @@ fn inventory_keys(candidates: &[(String, PathBuf)]) -> Vec<String> {
     keys
 }
 
-/// Identity plus drift. The snapshot lives beside the caches and is refreshed
-/// here, so a change is reported ONCE and the new state becomes the baseline —
-/// re-running --explain immediately after shows no diff. That is a tripwire,
-/// not a log; if you need the history, keep the output.
 fn inventory_id(candidates: &[(String, PathBuf)]) -> Inventory {
     let keys = inventory_keys(candidates);
     let mut h: u64 = 5381;
@@ -286,23 +287,7 @@ fn inventory_id(candidates: &[(String, PathBuf)]) -> Inventory {
             h = h.wrapping_mul(33) ^ b as u64;
         }
     }
-    let snap = jolta_home().join("inventory");
-    let previous: Option<Vec<String>> = fs::read_to_string(&snap)
-        .ok()
-        .map(|t| t.lines().filter(|l| !l.is_empty()).map(str::to_string).collect());
-    let (added, removed, first_seen) = match &previous {
-        None => (Vec::new(), Vec::new(), true),
-        Some(prev) => (
-            keys.iter().filter(|k| !prev.contains(k)).cloned().collect(),
-            prev.iter().filter(|k| !keys.contains(k)).cloned().collect(),
-            false,
-        ),
-    };
-    if previous.as_deref() != Some(keys.as_slice()) {
-        let _ = fs::create_dir_all(jolta_home());
-        let _ = fs::write(&snap, format!("{}\n", keys.join("\n")));
-    }
-    Inventory { count: candidates.len(), digest: format!("{h:016x}"), added, removed, first_seen }
+    Inventory { count: candidates.len(), digest: format!("{h:016x}") }
 }
 
 pub struct Explanation {
@@ -567,18 +552,31 @@ fn try_auto_install(spec: &str) -> bool {
 /// diagnostic bundle.)
 pub fn redacted_source(source: &str) -> String {
     if !(source.starts_with('/') || source.get(1..3) == Some(":\\")) {
-        // "jolta default (/home/x/.jolta/default)" — the parenthetical is a
-        // path in the operator's home directory; the label alone is enough.
         return match source.split_once(" (") {
             Some((label, _)) => label.to_string(),
             None => source.to_string(),
         };
     }
-    let name = Path::new(source).file_name().map_or("pin file".into(), |n| n.to_string_lossy().to_string());
-    match env::current_dir() {
-        Ok(cwd) if Path::new(source).parent() == Some(cwd.as_path()) => format!("./{name}"),
-        _ => format!("{name} in a parent directory"),
+    let path = Path::new(source);
+    let name = path.file_name().map_or("pin file".into(), |n| n.to_string_lossy().to_string());
+    let Some(dir) = path.parent() else { return name };
+    // Relative keeps WHICH ancestor — the diagnostically useful part — while
+    // dropping the absolute prefix, which is username and directory layout.
+    if let Ok(cwd) = env::current_dir() {
+        if dir == cwd {
+            return format!("./{name}");
+        }
+        let mut up = 0;
+        let mut probe: Option<&Path> = Some(cwd.as_path());
+        while let Some(p) = probe {
+            if p == dir {
+                return format!("{}{name}", "../".repeat(up));
+            }
+            up += 1;
+            probe = p.parent();
+        }
     }
+    name
 }
 
 pub struct Resolved {

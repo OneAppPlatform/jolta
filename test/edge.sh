@@ -1800,20 +1800,14 @@ check "json names the pin text" '"spec": "87"' "$(jolta current --json 2>&1)"
 printf 'temurin@87\n' > .java-version
 check "json reflects a changed pin" '"spec": "temurin@87"' "$(jolta current --json 2>&1)"
 
-# --- drift: the digest is the gate, the diff is what an operator can act on ---
+# --- the rule's CONTENT, not just its address ---
+# 'source' names which file decided; two different pins from the same path are
+# indistinguishable without the spec, so a consumer can't tell a changed rule
+# from a changed machine.
+printf '87\n' > .java-version
+check "json names the pin text" '"spec": "87"' "$(jolta current --json 2>&1)"
 printf 'temurin@87\n' > .java-version
-jolta current --explain >/dev/null 2>&1          # establish a baseline
-jolta_rc jolta current --explain
-check_not "no drift reported when nothing changed" "changed since last check" "$out"
-mk_jdk temurin-85.0.1 85.0.1 "Eclipse Adoptium"
-jolta_rc jolta current --explain
-check "an appearing JDK is reported" "+temurin-85.0.1" "$out"
-jolta_rc jolta current --explain
-check_not "drift is a tripwire, not a log" "changed since last check" "$out"
-rm -rf "$JOLTA_HOME/jdks/temurin-85.0.1"
-jolta_rc jolta current --explain
-check "a disappearing JDK is reported" "-temurin-85.0.1" "$out"
-check "json exposes first_seen" '"first_seen"' "$(jolta current --json --explain 2>&1)"
+check "json reflects a changed pin" '"spec": "temurin@87"' "$(jolta current --json 2>&1)"
 
 # --- the near miss belongs in the DEFAULT failure, not behind a flag ---
 # 87.0.7 exists as temurin and corretto; pin an exact build that doesn't.
@@ -1836,6 +1830,50 @@ check_not "near miss excludes other distros" "corretto-87.0.7" "$nearline"
 printf '79\n' > .java-version
 jolta_rc jolta current
 check_not "major pin claims no exactness" "is exact" "$out"
+
+# --- redaction: relative keeps WHICH ancestor, drops the absolute prefix ---
+mkdir -p "$work/s/x/y/z"
+printf '87.0.6\n' > "$work/s/x/.java-version"
+cd "$work/s/x"     && jolta_rc jolta current
+check "pin in cwd renders ./"            "./.java-version"      "$out"
+check_not "cwd form leaks no absolute"   "$work/s/x/.java"      "$out"
+cd "$work/s/x/y"   && jolta_rc jolta current
+check "pin one level up renders ../"     "../.java-version"     "$out"
+cd "$work/s/x/y/z" && jolta_rc jolta current
+check "pin two levels up renders ../../" "../../.java-version"  "$out"
+check_not "deep form still leaks nothing" "$work/s/x/.java"     "$out"
+check "explain restores the full path"   "$work/s/x/.java-version" "$(jolta current --explain 2>&1)"
+check "which --explain names the pin"    ".java-version"        "$(jolta which --explain 2>&1)"
+rm -f "$work/s/x/.java-version"
+
+# a non-file source (global default) must print its label and no home path
+cd "$work/s"
+rm -f .java-version          # otherwise the project pin shadows the default
+printf '87.0.6\n' > "$JOLTA_HOME/default"
+jolta_rc jolta current
+check "global default names itself"      "jolta default"        "$out"
+check_not "global default hides its path" "$JOLTA_HOME/default" "$out"
+rm -f "$JOLTA_HOME/default"
+
+# --- provenance stays stateless: --explain must not write to JOLTA_HOME ---
+printf 'temurin@87\n' > "$work/s/.java-version"
+before=$(ls "$JOLTA_HOME" | sort | tr '\n' ' ')
+jolta current --explain >/dev/null 2>&1
+jolta current --explain >/dev/null 2>&1
+after=$(ls "$JOLTA_HOME" | sort | tr '\n' ' ')
+check_eq "--explain writes no new state" "$before" "$after"
+check_not "no drift reporting remains" "changed since last check" "$(jolta current --explain 2>&1)"
+
+# digest identity: stable when nothing moves, different when it does
+d1=$(jolta current --json --explain 2>&1)
+d2=$(jolta current --json --explain 2>&1)
+check_eq "digest stable across runs" "$d1" "$d2"
+mk_jdk temurin-84.0.1 84.0.1 "Eclipse Adoptium"
+d3=$(jolta current --json --explain 2>&1)
+if [ "$d1" = "$d3" ]; then bad "digest moves when a JDK appears" "     unchanged"; else ok "digest moves when a JDK appears"; fi
+rm -rf "$JOLTA_HOME/jdks/temurin-84.0.1"
+d4=$(jolta current --json --explain 2>&1)
+check_eq "digest returns when the JDK leaves" "$d1" "$d4"
 
 cd "$work"
 
