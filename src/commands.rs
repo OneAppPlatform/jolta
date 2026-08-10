@@ -641,10 +641,11 @@ pub fn cmd_current(rest: &[String]) {
     if json {
         let tail = ex.as_ref().map(provenance_json).unwrap_or_default();
         println!(
-            "{{\"version\": {}, \"vendor\": {}, \"home\": {}, \"source\": {}{tail}}}",
+            "{{\"version\": {}, \"vendor\": {}, \"home\": {}, \"spec\": {}, \"source\": {}{tail}}}",
             version_of(&r.home).as_deref().map_or("null".to_string(), json_str),
             vendor_of(&r.home).map_or("null".to_string(), json_str),
             json_str(&r.home.display().to_string()),
+            r.spec.as_deref().map_or("null".to_string(), json_str),
             json_str(&r.source)
         );
         return;

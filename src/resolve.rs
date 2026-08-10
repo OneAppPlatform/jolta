@@ -559,6 +559,11 @@ fn try_auto_install(spec: &str) -> bool {
 pub struct Resolved {
     pub home: PathBuf,
     pub source: String,
+    /// The pin text that produced this answer. `source` names WHERE the rule
+    /// came from; this is WHAT it said. Without it two runs are
+    /// indistinguishable when the pin file changed but its path didn't, and a
+    /// consumer diffing them cannot tell a changed rule from a changed machine.
+    pub spec: Option<String>,
 }
 
 pub fn resolve_current(auto_install: bool) -> Resolved {
@@ -637,11 +642,11 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
                     installed.join(" ")
                 ));
             });
-            Resolved { home, source: pin.source }
+            Resolved { home, source: pin.source, spec: Some(spec) }
         }
         None => {
             if let Some(home) = system_default() {
-                return Resolved { home, source: pin.source };
+                return Resolved { home, source: pin.source, spec: None };
             }
             // Fresh machine: no pin, no default, no JDK anywhere. Hands-off
             // means `java` still works — fetch the latest LTS and make it
@@ -660,6 +665,7 @@ pub fn resolve_current(auto_install: bool) -> Resolved {
                     let _ = fs::write(jolta_home().join("default"), format!("{spec}\n"));
                     if let Some(home) = resolve(&spec) {
                         return Resolved {
+                            spec: Some(spec.clone()),
                             home,
                             source: format!("jolta default ({spec}, latest LTS, installed on first run)"),
                         };

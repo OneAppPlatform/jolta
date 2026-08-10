@@ -1784,6 +1784,15 @@ else
 fi
 rm -rf "$JOLTA_HOME/jdks/temurin-86.0.1"
 
+# --- the rule's CONTENT, not just its address ---
+# 'source' names which file decided; two different pins from the same path are
+# indistinguishable without the spec, so a consumer can't tell a changed rule
+# from a changed machine.
+printf '87\n' > .java-version
+check "json names the pin text" '"spec": "87"' "$(jolta current --json 2>&1)"
+printf 'temurin@87\n' > .java-version
+check "json reflects a changed pin" '"spec": "temurin@87"' "$(jolta current --json 2>&1)"
+
 # --- drift: the digest is the gate, the diff is what an operator can act on ---
 printf 'temurin@87\n' > .java-version
 jolta current --explain >/dev/null 2>&1          # establish a baseline
