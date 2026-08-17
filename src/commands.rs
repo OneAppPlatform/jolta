@@ -206,13 +206,31 @@ pub fn cmd_setup() {
     }
     let home = jolta_home();
     for sub in ["bin", "jdks", "cache", "shims"] {
-        let _ = fs::create_dir_all(home.join(sub));
+        let dir = home.join(sub);
+        // surfacing this beats the confusing copy failure it causes later
+        // (e.g. a stray FILE named .jolta blocks the whole tree)
+        fs::create_dir_all(&dir).unwrap_or_else(|e| die(&format!("cannot create {}: {e}", dir.display())));
     }
     let me = env::current_exe().unwrap_or_else(|_| die("cannot locate the jolta binary"));
     let me = fs::canonicalize(&me).unwrap_or(me);
     let installed = home.join("bin").join(format!("jolta{}", env::consts::EXE_SUFFIX));
-    if me != installed {
+    // `me` is canonical but `installed` is plainly joined; on Windows the
+    // canonical form carries a \\?\ prefix, so a bare `me != installed` is
+    // true even when both name THIS running binary — setup would then delete
+    // itself and fail copying from the path it just removed (os error 2).
+    // Canonicalize the installed path too, as cmd_reshim does.
+    let is_installed = me == installed || fs::canonicalize(&installed).ok().as_deref() == Some(&me);
+    if !is_installed {
         let _ = fs::remove_file(&installed);
+        // Windows can't delete a running exe (an earlier install may be busy
+        // in a shell hook) but it can rename one: move it aside so the copy
+        // lands; the stray .old is cleaned up on the next setup run.
+        #[cfg(windows)]
+        if installed.exists() {
+            let old = installed.with_extension("exe.old");
+            let _ = fs::remove_file(&old);
+            let _ = fs::rename(&installed, &old);
+        }
         if brew_opt_path(&me).is_some_and(|opt| platform::make_shim(&opt, &installed)) {
             // A COPY of a brew binary goes stale on the next `brew upgrade` —
             // and, sitting earlier on PATH, silently shadows the upgraded one.

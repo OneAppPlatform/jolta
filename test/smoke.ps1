@@ -79,6 +79,20 @@ Check ".java-version written" "^$m1$" (Get-Content .java-version -Raw).Trim()
 Set-Location "$work\p2"
 Check "javac shim" "javac $m2\.|javac 1\.$m2\.|javac $m2" ((javac -version 2>&1) -join " ")
 
+# 10. setup installs, and a RE-RUN from the installed copy must survive it
+#     (the verbatim-path compare once made setup delete its own binary).
+#     CI only: setup edits the user PATH registry key and PS profiles, which
+#     this script promises never to touch on a real machine.
+if ($env:CI -eq "true") {
+  & $bin setup *> $null
+  $inst = Join-Path $env:JOLTA_HOME "bin\jolta.exe"
+  if (Test-Path $inst) { $script:pass++; Write-Host "ok   setup installs the binary" }
+  else { $script:fail++; Write-Host "FAIL setup installs the binary" }
+  $rerun = (& $inst setup 2>&1) -join " "
+  if ($LASTEXITCODE -eq 0 -and (Test-Path $inst)) { $script:pass++; Write-Host "ok   setup re-run from installed copy" }
+  else { $script:fail++; Write-Host "FAIL setup re-run from installed copy`n     got: $rerun" }
+}
+
 Set-Location $repo
 Remove-Item -Recurse -Force $work
 Write-Host ""
