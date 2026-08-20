@@ -79,6 +79,41 @@ Check ".java-version written" "^$m1$" (Get-Content .java-version -Raw).Trim()
 Set-Location "$work\p2"
 Check "javac shim" "javac $m2\.|javac 1\.$m2\.|javac $m2" ((javac -version 2>&1) -join " ")
 
+# 9b. doctor must call a healthy install healthy. Windows shims are hard links
+#     or copies whenever symlink_file is refused (Developer Mode is off by
+#     default), and PATH comes verbatim out of the registry while shims_dir()
+#     builds a fresh path — doctor once counted only symlinks and compared
+#     paths byte-wise, so it reported MISSING / NOT on PATH / BYPASSING on an
+#     install that worked perfectly.
+Set-Location "$work\p2"
+$doc = (& $bin doctor 2>&1) -join "`n"
+Check "doctor sees the shims"      "shims:\s+\S+ ok"  $doc
+Check "doctor sees shims on PATH"  "PATH:\s+\S+ ok"   $doc
+Check "doctor sees java resolving" "java:\s+\S+ ok"   $doc
+
+# 9c. The same install, spelled differently. Upper-casing JOLTA_HOME and the
+#     PATH entry changes nothing on a case-insensitive filesystem, so every
+#     verdict above must survive it unchanged.
+$savedHome = $env:JOLTA_HOME
+$savedPath = $env:PATH
+# replace the shims entry with an upper-cased, trailing-slash spelling rather
+# than prepending one, or the untouched original would satisfy the check
+$env:PATH = $savedPath -replace [regex]::Escape("$savedHome\shims"), "$($savedHome.ToUpper())\SHIMS\"
+$env:JOLTA_HOME = $savedHome.ToUpper()
+$docCase = (& $bin doctor 2>&1) -join "`n"
+Check "doctor survives a case-mangled JOLTA_HOME" "shims:\s+\S+ ok" $docCase
+Check "doctor survives a case-mangled PATH entry" "PATH:\s+\S+ ok"  $docCase
+$env:JOLTA_HOME = $savedHome
+$env:PATH = $savedPath
+
+# 9d. A hard-linked shim (the unprivileged Windows fallback) still counts.
+$javaShim = Join-Path $env:JOLTA_HOME "shims\java.exe"
+Remove-Item $javaShim -Force
+New-Item -ItemType HardLink -Path $javaShim -Target $bin | Out-Null
+$docHard = (& $bin doctor 2>&1) -join "`n"
+Check "doctor counts a hard-linked shim" "shims:\s+\S+ ok" $docHard
+& $bin reshim | Out-Null
+
 # 10. setup installs, and a RE-RUN from the installed copy must survive it
 #     (the verbatim-path compare once made setup delete its own binary).
 #     CI only: setup edits the user PATH registry key and PS profiles, which

@@ -15,7 +15,7 @@ use crate::jdk::{
     system_default, tool_bin, vendor_of, INSTALLABLE_VENDORS, KNOWN_VENDORS,
 };
 use crate::platform;
-use crate::paths::{home_dir, jolta_home, shims_dir, which};
+use crate::paths::{home_dir, jolta_home, path_starts_with, same_path, shims_dir, which};
 use crate::resolve::{clear_cache, read_pin, resolve, resolve_current};
 use crate::ui::{bad_mark, bold, cyan, die, dim, green, ok_mark, paint, warn_mark, yellow};
 
@@ -1786,12 +1786,17 @@ pub fn cmd_doctor(fix: bool) -> i32 {
         }
     }
 
+    // Shims are symlinks on Unix. On Windows make_shim falls back to a hard
+    // link or a copy whenever symlink_file is refused, and Developer Mode is
+    // off by default — so non-symlink shims are the norm there, not a fault.
+    // Counting only symlinks reported MISSING on a perfectly good install.
     let shim_count = fs::read_dir(shims_dir())
-        .map(|e| e.flatten().filter(|x| x.path().symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())).count())
+        .map(|e| e.flatten().filter(|x| x.path().symlink_metadata().is_ok_and(|m| !m.file_type().is_dir())).count())
         .unwrap_or(0);
     if shim_count > 0 {
-        // Symlinks can exist yet be dead: dangling after a moved binary, or a
-        // self-referential loop — either silently hands java to the OS stub.
+        // A shim can exist yet be dead: a symlink dangling after a moved
+        // binary, or a self-referential loop — either silently hands java to
+        // the OS stub.
         let java_shim = shims_dir().join(format!("java{}", env::consts::EXE_SUFFIX));
         match fs::canonicalize(&java_shim) {
             Ok(target) if target.is_file() => {
@@ -1812,8 +1817,9 @@ pub fn cmd_doctor(fix: bool) -> i32 {
         needs_reshim = true;
     }
 
+    let shims = shims_dir();
     let on_path = env::var_os("PATH")
-        .map(|p| env::split_paths(&p).any(|d| d == shims_dir()))
+        .map(|p| env::split_paths(&p).any(|d| same_path(&d, &shims)))
         .unwrap_or(false);
     if on_path {
         println!("  PATH:          {} ok (shims dir is on PATH)", ok_mark());
@@ -1824,11 +1830,23 @@ pub fn cmd_doctor(fix: bool) -> i32 {
     }
 
     match which("java") {
-        Some(p) if p.starts_with(shims_dir()) => {
+        Some(p) if path_starts_with(&p, &shims) => {
             println!("  java:          {} ok (resolves to the jolta shim)", ok_mark())
         }
         Some(p) => {
             println!("  java:          {} BYPASSING jolta ({} comes before the shims on PATH)", bad_mark(), p.display());
+            // Windows builds the effective PATH as machine entries first, then
+            // user entries, and jolta only ever writes the user key. Anything
+            // machine-wide — Oracle's javapath stub, an all-users JDK install,
+            // a chocolatey shim — therefore wins no matter what setup does,
+            // and no amount of re-running setup can reorder it.
+            #[cfg(windows)]
+            {
+                println!("                 Windows searches the machine PATH before the user PATH, and");
+                println!("                 jolta only edits the user PATH — a machine-wide entry always wins.");
+                println!("                 Remove that entry from the system PATH (Settings > Environment");
+                println!("                 Variables > System variables > Path), or move the shims dir there.");
+            }
             rc = 1;
         }
         None => {

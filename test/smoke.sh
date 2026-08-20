@@ -372,6 +372,17 @@ else
   echo "skip auto-install download test (set JOLTA_TEST_NETWORK=1 to enable)"
 fi
 
+# 18. doctor must call a healthy install healthy. It has no coverage at all
+#     historically, which is how three false-negative verdicts shipped: the
+#     shim tally counted symlinks only, and the PATH/java checks compared
+#     paths byte-wise. Unix hits the first of those too.
+cd "$work/p2" 2>/dev/null || cd "$work"
+doc=$(jolta doctor 2>&1 || true)
+check "doctor sees the shims"      "shims:" "$doc"
+check "doctor reports shims ok"    " ok "   "$(printf '%s\n' "$doc" | grep 'shims:')"
+check "doctor reports PATH ok"     " ok "   "$(printf '%s\n' "$doc" | grep 'PATH:')"
+check "doctor reports java ok"     " ok "   "$(printf '%s\n' "$doc" | grep 'java:')"
+
 echo
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]
