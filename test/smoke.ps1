@@ -106,12 +106,19 @@ Check "doctor survives a case-mangled PATH entry" "PATH:\s+\S+ ok"  $docCase
 $env:JOLTA_HOME = $savedHome
 $env:PATH = $savedPath
 
-# 9d. A hard-linked shim (the unprivileged Windows fallback) still counts.
+# 9d. A non-symlink shim — the unprivileged Windows fallback, hard link then
+#     copy — must still be counted. Hard links cannot cross volumes and the
+#     runner checks out on a different drive from TEMP, so link against a copy
+#     inside JOLTA_HOME and fall back to a plain copy if even that is refused.
 $javaShim = Join-Path $env:JOLTA_HOME "shims\java.exe"
+$localBin = Join-Path $env:JOLTA_HOME "bin\jolta.exe"
+New-Item -ItemType Directory -Force -Path (Split-Path $localBin) | Out-Null
+Copy-Item $bin $localBin -Force
 Remove-Item $javaShim -Force
-New-Item -ItemType HardLink -Path $javaShim -Target $bin | Out-Null
+try   { New-Item -ItemType HardLink -Path $javaShim -Target $localBin -ErrorAction Stop | Out-Null }
+catch { Copy-Item $localBin $javaShim -Force }
 $docHard = (& $bin doctor 2>&1) -join "`n"
-Check "doctor counts a hard-linked shim" "shims:\s+\S+ ok" $docHard
+Check "doctor counts a non-symlink shim" "shims:\s+\S+ ok" $docHard
 & $bin reshim | Out-Null
 
 # 10. setup installs, and a RE-RUN from the installed copy must survive it
