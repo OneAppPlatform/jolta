@@ -107,6 +107,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   <div class="group">Integration</div>
   <a href="#cmd-setup"><code>setup</code></a>
   <a href="#cmd-hook"><code>hook</code></a>
+  <a href="#shell-files">Shell startup files</a>
   <a href="#cmd-completions"><code>completions</code></a>
   <a href="#cmd-toolchains"><code>toolchains</code></a>
   <a href="#cmd-reshim"><code>reshim</code></a>
@@ -147,7 +148,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <tr><td><code>jolta exec &lt;cmd&gt;</code></td><td>Run any command with <code>JAVA_HOME</code>/<code>PATH</code> set</td></tr>
 <tr><td><code>jolta env</code></td><td>Print <code>export</code> lines for <code>eval</code></td></tr>
 <tr><td><code>jolta home</code></td><td>Print the resolved <code>JAVA_HOME</code></td></tr>
-<tr><td><code>jolta hook [shell]</code></td><td>Print the shell hook (zsh, bash, fish, powershell)</td></tr>
+<tr><td><code>jolta hook [shell]</code></td><td>Print the shell hook (zsh, bash, fish, nu, powershell)</td></tr>
 <tr><td><code>jolta completions [shell]</code></td><td>Print tab-completions (zsh, bash, fish)</td></tr>
 <tr><td><code>jolta toolchains [--write]</code></td><td>Maven <code>toolchains.xml</code> (+ Gradle hint) from installed JDKs</td></tr>
 <tr><td><code>jolta mirror sync|verify</code></td><td>Build or re-hash an offline JDK mirror (<code>JOLTA_DOWNLOAD_BASE</code>)</td></tr>
@@ -352,8 +353,9 @@ metadata.</p>
 <h3 id="cmd-setup"><code>jolta setup</code></h3>
 <p class="sig">One-time install: shims, profile, hook.</p>
 <p>Installs the binary into <code>$JOLTA_HOME/bin</code>, generates shims, and adds
-two marked blocks to your shell profile: the <code>PATH</code> prepend and the
-<code>JAVA_HOME</code> hook line. A Homebrew-installed jolta is <em>linked</em>
+two marked blocks to your shell startup files: the <code>PATH</code> prepend and the
+<code>JAVA_HOME</code> hook line (see <a href="#shell-files">Shell startup files</a>
+for which file each one lands in, and why they differ). A Homebrew-installed jolta is <em>linked</em>
 through brew's stable <code>opt</code> path, so <code>brew upgrade jolta</code>
 updates the shims and everything else with no further action; any other binary
 (curl installer, source build) is <em>copied</em>, so the downloaded file or
@@ -364,7 +366,7 @@ user <code>PATH</code> in the registry itself (<code>REG_EXPAND_SZ</code> and
 and adds the hook to every PowerShell profile — with the manual steps printed only
 as a fallback if editing fails. <code>implode</code> undoes both.</p>
 
-<h3 id="cmd-hook"><code>jolta hook [zsh|bash|fish|powershell]</code></h3>
+<h3 id="cmd-hook"><code>jolta hook [zsh|bash|fish|nu|powershell]</code></h3>
 <p class="sig">Keeps <code>JAVA_HOME</code> in sync; everything else works without it.</p>
 <p>Prints shell code (installed by <code>setup</code>, or
 <code>eval "$(jolta hook zsh)"</code> yourself) that re-exports <code>JAVA_HOME</code>
@@ -376,8 +378,67 @@ can't be satisfied the hook <em>unsets</em> <code>JAVA_HOME</code> so builds fai
 loudly rather than on the wrong JDK. The hook prints nothing to stdout, survives
 <code>set&nbsp;-u</code>/<code>set&nbsp;-e</code>, and works on macOS's ancient
 <code>/bin/bash</code> 3.2. The fish variant reacts to <code>PWD</code> changes and
-the <code>fish_prompt</code> event; <code>setup</code> writes fish-syntax blocks to
-<code>~/.config/fish/config.fish</code> when fish is your shell.</p>
+the <code>fish_prompt</code> event.</p>
+
+<h3 id="shell-files">Shell startup files</h3>
+<p class="sig">Which file each block goes in, and why they differ.</p>
+<p><code>setup</code> writes two blocks, and they do not belong in the same
+file. The <code>PATH</code> prepend wants a file read <em>once per login
+session</em>; the <code>JAVA_HOME</code> hook installs pre-prompt handlers
+(<code>chpwd</code>/<code>precmd</code> under zsh,
+<code>PROMPT_COMMAND</code> under bash) and so has to run in <em>every
+interactive shell</em>, nested ones included — in a login-only file, a plain
+<code>zsh</code> inside your shell would have no pin tracking at all.</p>
+<table>
+<tr><th>Shell</th><th><code>PATH</code> block</th><th>Hook block</th></tr>
+<tr><td>zsh</td><td><code>~/.zprofile</code></td><td><code>~/.zshrc</code></td></tr>
+<tr><td>bash</td><td colspan="2"><code>~/.bash_profile</code> (or
+  <code>~/.bash_login</code>/<code>~/.profile</code>, whichever exists)
+  <em>and</em> <code>~/.bashrc</code> — both blocks in both</td></tr>
+<tr><td>fish</td><td colspan="2"><code>~/.config/fish/config.fish</code></td></tr>
+<tr><td>nu</td><td><code>env.nu</code></td><td><code>config.nu</code></td></tr>
+<tr><td>PowerShell</td><td>user <code>PATH</code> (registry)</td><td><code>profile.ps1</code></td></tr>
+<tr><td>sh, dash, ksh</td><td><code>~/.profile</code></td><td>none available</td></tr>
+<tr><td>csh, tcsh</td><td colspan="2">not written — <code>setup</code> prints
+  <code>setenv</code> lines to add by hand</td></tr>
+</table>
+<p>Why not <code>~/.zshenv</code>, which every zsh reads? Because on macOS
+<code>/etc/zprofile</code> runs <code>path_helper</code> <em>after</em> it, and
+<code>path_helper</code> rebuilds <code>PATH</code> with <code>/usr/bin</code>
+in front — so a prepend from <code>.zshenv</code> ends up <em>behind</em>
+<code>/usr/bin/java</code>, the stub jolta exists to get out of the way of.
+<code>.zprofile</code> is read after <code>path_helper</code>, so it wins.</p>
+<p>bash gets both blocks in both files because no single file covers the
+cases: a macOS login bash reads only <code>.bash_profile</code>, a Linux
+terminal only <code>.bashrc</code>, and <code>ssh host 'cmd'</code> only
+<code>.bashrc</code>. The duplication is free — the <code>PATH</code> prepend
+is guarded by a <code>case</code> on <code>$PATH</code> and the hook by a
+<code>PROMPT_COMMAND</code> check, so whichever runs second is a no-op. That
+guard is also why nested shells no longer stack up copies of the shims. fish
+needs no split at all: <code>config.fish</code> is read by every fish shell,
+login or not, interactive or not.</p>
+<p>nushell gets its own dialect (<code>src/hooks/nu.nu</code>): nu has real
+<code>pre_prompt</code> and <code>env_change.PWD</code> hooks, and reads files
+with builtins, so the fork-free gate survives intact. Three things about nu are
+worth knowing. Its config directory is platform-specific —
+<code>~/Library/Application&nbsp;Support/nushell</code> on macOS,
+<code>$XDG_CONFIG_HOME/nushell</code> (else <code>~/.config/nushell</code>) on
+Linux — so <code>setup</code> asks nu itself (<code>$nu.env-path</code>,
+<code>$nu.config-path</code>) rather than guessing. Nu has no
+<code>eval</code> and <code>source</code> needs a path known at parse time, so
+the hook cannot be piped in: <code>setup</code> writes
+<code>$JOLTA_HOME/hook.nu</code> and <code>config.nu</code> sources it, and
+every <code>reshim</code> rewrites that file so it is self-healing. And nu
+loads <code>env.nu</code>/<code>config.nu</code> only in REPL mode —
+<code>nu -c</code> and <code>nu script.nu</code> load neither — so under nu the
+shims are on <code>PATH</code> for interactive sessions and inherited by
+anything they launch, which is nu's design rather than something setup can
+change.</p>
+
+<p>Upgrading from a jolta that wrote both blocks to one file? <code>setup</code>
+and <code>doctor --fix</code> <em>move</em> the <code>PATH</code> block rather
+than duplicate it — leaving the old unguarded copy behind would prepend a
+second set of shims on every shell.</p>
 
 <h3 id="cmd-completions"><code>jolta completions [zsh|bash|fish]</code></h3>
 <p class="sig">Tab-completion that can't drift from the binary.</p>
@@ -543,7 +604,7 @@ their upgrades apply automatically.</p>
 <p>Two mechanisms keep <code>JAVA_HOME</code> correct:</p>
 <ol>
   <li><strong>Shims</strong> export it for everything they exec.</li>
-  <li><strong>The shell hook</strong> (installed by setup; zsh, bash, fish, and
+  <li><strong>The shell hook</strong> (installed by setup; zsh, bash, fish, nu, and
       PowerShell) re-resolves it whenever the pin in effect changes — covering tools
       that read <code>JAVA_HOME</code> directly, like Maven, Gradle, and IDEs launched
       from a terminal. That is more than <code>cd</code>: a <code>git checkout</code>

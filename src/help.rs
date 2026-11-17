@@ -73,11 +73,20 @@ pub const PAGES: &[HelpPage] = &[
              and generates a shim for every JDK tool (java, javac, jshell, ...) in \
              shims/. Homebrew installs are linked through brew's stable opt path \
              instead of copied, so 'brew upgrade jolta' flows through automatically.",
-            "Also adds two blocks to your shell profile: PATH setup that puts the \
-             shims first, and a hook that keeps JAVA_HOME in sync with whichever \
-             pin applies. On Windows the user PATH is edited in the registry and the \
-             hook goes into your PowerShell profiles. Safe to re-run at any time — \
-             existing profile lines are never duplicated.",
+            "Also adds two blocks to your shell startup files: PATH setup that puts \
+             the shims first, and a hook that keeps JAVA_HOME in sync with whichever \
+             pin applies. They go in different files because they need different \
+             things — PATH in one read once per login session (~/.zprofile under \
+             zsh), the hook in one read by every interactive shell (~/.zshrc), since \
+             it installs pre-prompt handlers. bash gets both in both ~/.bashrc and \
+             its login file, since neither alone covers macOS, Linux and ssh. On \
+             Windows the user PATH is edited in the registry and the hook goes into \
+             your PowerShell profiles.",
+            "Safe to re-run at any time — existing lines are never duplicated, and \
+             a PATH block left in the wrong file by an older jolta is moved rather \
+             than copied. Shells with no hook dialect (sh, dash, ksh) get the PATH \
+             block and a note; csh and tcsh get printed instructions instead, since \
+             their syntax is not POSIX.",
         ],
         examples: &[("jolta setup", "install, then open a new shell to activate")],
     },
@@ -399,7 +408,7 @@ pub const PAGES: &[HelpPage] = &[
     HelpPage {
         name: "hook",
         summary: "print the shell hook that keeps JAVA_HOME fresh",
-        usage: &["jolta hook [zsh|bash|fish|powershell]"],
+        usage: &["jolta hook [zsh|bash|fish|nu|powershell]"],
         aliases: &[],
         about: &[
             "Prints hook code for your shell (default: the one you're running). \
@@ -524,7 +533,8 @@ pub const PAGES: &[HelpPage] = &[
         aliases: &[],
         about: &[
             "Removes $JOLTA_HOME — including every jolta-installed JDK — and \
-             strips jolta's lines from your shell profile. JDKs installed outside \
+             strips jolta's lines from every shell startup file setup wrote to. \
+             JDKs installed outside \
              jolta (Homebrew, /Library/Java, SDKMAN, ...) are untouched.",
             "Shows exactly what will be deleted and asks for confirmation first; \
              --yes skips the prompt for scripted removal.",

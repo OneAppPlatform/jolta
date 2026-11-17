@@ -142,10 +142,21 @@ pub fn cmd_reshim() {
     }
     clear_cache();
     touch_stamp();
+    write_nu_hook();
     println!("{} {count} shims in {}", ok_mark(), shims.display());
     // an installed JDK should be discoverable as one: keep /usr/libexec/
     // java_home's view in step with what jolta actually has
     sync_registry_after_change();
+}
+
+/// Keep $JOLTA_HOME/hook.nu in step with the binary. Nu has no eval, so
+/// config.nu sources this file by a literal path — a missing or stale copy is
+/// a parse error at every nu startup, not a quietly absent hook. Writing it on
+/// every reshim means any mutating jolta command restores it, as do setup and
+/// `doctor --fix`.
+fn write_nu_hook() {
+    let _ = fs::create_dir_all(jolta_home());
+    let _ = fs::write(nu_hook_file(), include_str!("hooks/nu.nu"));
 }
 
 /// Bump $JOLTA_HOME/.stamp so shell hooks notice state changed and refresh
@@ -159,18 +170,200 @@ fn touch_stamp() {
     let _ = fs::write(jolta_home().join(".stamp"), format!("{t}\n"));
 }
 
-fn profile_file() -> PathBuf {
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let shell = Path::new(&shell).file_name().and_then(|s| s.to_str()).unwrap_or("zsh").to_string();
-    match shell.as_str() {
-        "zsh" => home_dir().join(".zshrc"),
-        "bash" => {
-            let bp = home_dir().join(".bash_profile");
-            if bp.is_file() { bp } else { home_dir().join(".bashrc") }
-        }
-        "fish" => home_dir().join(".config").join("fish").join("config.fish"),
-        _ => home_dir().join(".profile"),
+/// Markers bounding jolta's two blocks in a profile file. The hook's opening
+/// line carries a description after HOOK_START, so match by prefix, and note
+/// that a hook line never matches PATH_START — that is what lets a migration
+/// lift one block out of a file and leave the other in place.
+const PATH_START: &str = "# >>> jolta >>>";
+const PATH_END: &str = "# <<< jolta <<<";
+const HOOK_START: &str = "# >>> jolta hook";
+const HOOK_END: &str = "# <<< jolta hook <<<";
+
+/// One file `setup` writes to, and which of the two blocks belong in it.
+///
+/// They have opposite requirements. The PATH prepend wants a file read once
+/// per login session, and on macOS one read *after* /etc/zprofile runs
+/// path_helper: path_helper rebuilds PATH with /usr/bin in front, so a
+/// prepend from .zshenv ends up behind /usr/bin and its java stub. The
+/// JAVA_HOME hook installs chpwd/precmd handlers (src/hooks/zsh.sh) and so
+/// has to run in every interactive shell, nested ones included — a login-only
+/// file would leave a plain `zsh` with no pin tracking at all.
+#[cfg(unix)]
+struct Target {
+    file: PathBuf,
+    path_block: bool,
+    hook_block: bool,
+}
+
+/// The file a login bash actually reads: the first of these that exists,
+/// since bash stops at the first hit. When none exists we create ~/.profile
+/// rather than ~/.bash_profile — creating the latter would shadow ~/.profile
+/// for every future login shell and silently drop whatever the user's distro
+/// put there.
+#[cfg(unix)]
+fn bash_login_file() -> PathBuf {
+    let home = home_dir();
+    [".bash_profile", ".bash_login", ".profile"]
+        .iter()
+        .map(|n| home.join(n))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| home.join(".profile"))
+}
+
+/// Shells `jolta hook` has a dialect for (src/hooks/). Consulted both by
+/// cmd_hook and by profile_targets, so setup can never write an `eval
+/// "$(jolta hook ...)"` line for a shell that would then die on it.
+pub fn has_hook(shell: &str) -> bool {
+    matches!(shell, "zsh" | "bash" | "fish" | "nu" | "powershell" | "pwsh")
+}
+
+/// nu's config directory is platform-specific — ~/Library/Application
+/// Support/nushell on macOS, $XDG_CONFIG_HOME/nushell (else ~/.config/nushell)
+/// on Linux — and shifts again under $XDG_CONFIG_HOME or --config. Rather than
+/// reimplement that and drift from whatever nu does next, ask nu: $nu.env-path
+/// and $nu.config-path are populated even under --no-config-file, so the query
+/// loads none of the user's code and has no side effects.
+#[cfg(unix)]
+fn nu_config_paths() -> Option<(PathBuf, PathBuf)> {
+    // $SHELL is nu here, so use it rather than hoping nu is on PATH already
+    let nu = env::var_os("SHELL").unwrap_or_else(|| "nu".into());
+    let out = Command::new(nu)
+        .args(["--no-config-file", "-c", "[$nu.env-path, $nu.config-path] | to text"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
     }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let env_nu = PathBuf::from(lines.next()?);
+    let config_nu = PathBuf::from(lines.next()?);
+    // a relative path would mean nu told us something we don't understand
+    (env_nu.is_absolute() && config_nu.is_absolute()).then_some((env_nu, config_nu))
+}
+
+/// The hook file `setup` generates for nu. Nu has no `eval`, and `source`
+/// needs a path known at parse time, so the hook cannot be piped into the
+/// shell the way every other dialect is — it goes on disk and config.nu
+/// sources it. cmd_reshim rewrites it, so it is restored by any jolta command
+/// that changes state, as well as by setup and `doctor --fix`.
+pub fn nu_hook_file() -> PathBuf {
+    jolta_home().join("hook.nu")
+}
+
+#[cfg(unix)]
+fn profile_targets() -> Vec<Target> {
+    let home = home_dir();
+    match shell_name().as_str() {
+        // zsh splits cleanly: .zprofile for login shells (and it is read
+        // after path_helper), .zshrc for every interactive one.
+        "zsh" => vec![
+            Target { file: home.join(".zprofile"), path_block: true, hook_block: false },
+            Target { file: home.join(".zshrc"), path_block: false, hook_block: true },
+        ],
+        // bash has no single file covering the cases: a macOS login bash
+        // reads only .bash_profile, a Linux terminal only .bashrc, and
+        // `ssh host cmd` only .bashrc. Both blocks go in both files; both are
+        // no-ops once applied (the PATH guard below, and the PROMPT_COMMAND
+        // guard in src/hooks/bash.sh), so the overlap costs a string compare.
+        "bash" => vec![
+            Target { file: bash_login_file(), path_block: true, hook_block: true },
+            Target { file: home.join(".bashrc"), path_block: true, hook_block: true },
+        ],
+        // config.fish is read by every fish shell — login or not, interactive
+        // or not — so fish needs no split.
+        "fish" => vec![Target {
+            file: home.join(".config").join("fish").join("config.fish"),
+            path_block: true,
+            hook_block: true,
+        }],
+        // nu is not POSIX either, but it has real hooks (env_change.PWD and
+        // pre_prompt) and reads files with builtins, so the dialect in
+        // src/hooks/nu.nu is a faithful port. PATH goes in env.nu by
+        // convention; the hook must go in config.nu, where $env.config
+        // exists. Both are read only in REPL mode — `nu -c` and `nu
+        // script.nu` load neither, which is nu's design, not something setup
+        // can work around.
+        "nu" => match nu_config_paths() {
+            Some((env_nu, config_nu)) => vec![
+                Target { file: env_nu, path_block: true, hook_block: false },
+                Target { file: config_nu, path_block: false, hook_block: true },
+            ],
+            None => Vec::new(),
+        },
+        // csh and tcsh take setenv, not export, and read ~/.cshrc / ~/.tcshrc.
+        // Neither the blocks below nor `jolta hook` has a csh dialect, so
+        // falling through to ~/.profile would be wrong twice over: a file csh
+        // never reads, in syntax it cannot parse. No targets — ensure_profile
+        // prints what to add by hand instead.
+        "csh" | "tcsh" => Vec::new(),
+        // sh, dash, ksh and friends: POSIX syntax, and ~/.profile is theirs,
+        // so the PATH block is simply correct. None of them has a hook
+        // dialect, though, and writing an `eval "$(jolta hook ksh)"` line
+        // would make every login shell print cmd_hook's error — so the shims
+        // go on PATH and JAVA_HOME is left to the user.
+        other => vec![Target {
+            file: home.join(".profile"),
+            path_block: true,
+            hook_block: has_hook(other),
+        }],
+    }
+}
+
+/// The PATH block. The prepend is guarded because its file can be read more
+/// than once per session (a nested interactive shell re-reads .bashrc; a
+/// .bash_profile that sources .bashrc reads both), and an unguarded prepend
+/// would stack another copy of the shims on PATH each time.
+#[cfg(unix)]
+fn path_block(shell: &str) -> String {
+    if shell == "nu" {
+        // $env.PATH is a list<string> on unix, so this is a list prepend, and
+        // `not-in` is a membership test rather than the substring match the
+        // POSIX guard has to do on a joined string.
+        format!(
+            "\n{PATH_START}\n$env.JOLTA_HOME = ($env.HOME | path join \".jolta\")\n\
+             if ($env.JOLTA_HOME | path join \"shims\") not-in $env.PATH {{\n\
+             \x20   $env.PATH = ($env.PATH | prepend [\n\
+             \x20       ($env.JOLTA_HOME | path join \"shims\")\n\
+             \x20       ($env.JOLTA_HOME | path join \"bin\")\n\
+             \x20   ])\n\
+             }}\n{PATH_END}\n"
+        )
+    } else if shell == "fish" {
+        format!(
+            "\n{PATH_START}\nset -gx JOLTA_HOME $HOME/.jolta\n\
+             if not contains $JOLTA_HOME/shims $PATH\n\
+             \x20   set -gx PATH $JOLTA_HOME/shims $JOLTA_HOME/bin $PATH\n\
+             end\n{PATH_END}\n"
+        )
+    } else {
+        format!(
+            "\n{PATH_START}\nexport JOLTA_HOME=\"$HOME/.jolta\"\n\
+             case \":$PATH:\" in\n\
+             \x20 *\":$JOLTA_HOME/shims:\"*) ;;\n\
+             \x20 *) export PATH=\"$JOLTA_HOME/shims:$JOLTA_HOME/bin:$PATH\" ;;\n\
+             esac\n{PATH_END}\n"
+        )
+    }
+}
+
+#[cfg(unix)]
+fn hook_block(shell: &str) -> String {
+    let line = if shell == "fish" {
+        "jolta hook fish | source".to_string()
+    } else if shell == "nu" {
+        // `source` takes a parse-time constant, so no command substitution is
+        // possible here; prefer the ~ form when the file sits in the default
+        // place, so the line survives a home directory that moves.
+        let f = nu_hook_file();
+        match f.strip_prefix(home_dir()) {
+            Ok(rest) => format!("source ~/{}", rest.display()),
+            Err(_) => format!("source \"{}\"", f.display()),
+        }
+    } else {
+        format!("eval \"$(jolta hook {shell})\"")
+    };
+    format!("\n{HOOK_START} (keeps JAVA_HOME in sync with the pin in effect) >>>\n{line}\n{HOOK_END}\n")
 }
 
 pub fn shell_name() -> String {
@@ -344,55 +537,96 @@ fn ensure_windows_env() -> bool {
     changed
 }
 
-/// Append the PATH and JAVA_HOME-hook blocks to the shell profile when they
-/// are missing. Returns true if anything was added. Shared by setup and
+/// Append the PATH and JAVA_HOME-hook blocks to the files that own them,
+/// when missing. Returns true if anything changed. Shared by setup and
 /// `doctor --fix`.
 #[cfg(unix)]
 fn ensure_profile() -> bool {
     let shell = shell_name();
-    let fish = shell == "fish";
-    let profile = profile_file();
-    // fish config lives under ~/.config/fish/, which may not exist yet
-    if let Some(parent) = profile.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let existing = fs::read_to_string(&profile).unwrap_or_default();
-    let mut additions = String::new();
-    if existing.contains(">>> jolta >>>") {
-        println!("{} PATH setup already in {}", ok_mark(), profile.display());
-    } else {
-        additions.push_str(if fish {
-            "\n# >>> jolta >>>\nset -gx JOLTA_HOME $HOME/.jolta\nset -gx PATH $JOLTA_HOME/shims $JOLTA_HOME/bin $PATH\n# <<< jolta <<<\n"
+    let targets = profile_targets();
+    if targets.is_empty() {
+        if shell == "nu" {
+            // only reachable if nu could not be run or answered oddly
+            println!("{} could not ask nu where its config files are — add these by hand:", warn_mark());
+            println!("    # env.nu  (its path: run  $nu.env-path )");
+            println!("    $env.JOLTA_HOME = ($env.HOME | path join \".jolta\")");
+            println!("    $env.PATH = ($env.PATH | prepend [($env.JOLTA_HOME | path join \"shims\")])");
+            println!("    # config.nu  (its path: run  $nu.config-path )");
+            println!("    source {}", nu_hook_file().display());
         } else {
-            "\n# >>> jolta >>>\nexport JOLTA_HOME=\"$HOME/.jolta\"\nexport PATH=\"$JOLTA_HOME/shims:$JOLTA_HOME/bin:$PATH\"\n# <<< jolta <<<\n"
-        });
-        println!("{} added PATH setup to {}", ok_mark(), profile.display());
-    }
-    if existing.contains("jolta hook") {
-        println!("{} JAVA_HOME hook already in {}", ok_mark(), profile.display());
-    } else {
-        if fish {
-            additions.push_str(
-                "\n# >>> jolta hook (keeps JAVA_HOME in sync with the pin in effect) >>>\njolta hook fish | source\n# <<< jolta hook <<<\n",
-            );
-        } else {
-            additions.push_str(&format!(
-                "\n# >>> jolta hook (keeps JAVA_HOME in sync with the pin in effect) >>>\neval \"$(jolta hook {shell})\"\n# <<< jolta hook <<<\n",
-            ));
+            println!("{} jolta has no setup for {shell} — add this to your ~/.cshrc by hand:", warn_mark());
+            println!("    setenv JOLTA_HOME \"$HOME/.jolta\"");
+            println!("    setenv PATH \"${{JOLTA_HOME}}/shims:${{JOLTA_HOME}}/bin:${{PATH}}\"");
+            println!("  (no JAVA_HOME hook for csh — use: setenv JAVA_HOME `jolta home`)");
         }
-        println!("{} added JAVA_HOME hook to {}", ok_mark(), profile.display());
-    }
-    if additions.is_empty() {
         return false;
     }
-    let mut f = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&profile)
-        .unwrap_or_else(|e| die(&format!("cannot open {}: {e}", profile.display())));
-    f.write_all(additions.as_bytes())
-        .unwrap_or_else(|e| die(&format!("cannot write {}: {e}", profile.display())));
-    true
+    let hooked = targets.iter().any(|t| t.hook_block);
+    let mut changed = false;
+    for t in targets {
+        // fish config lives under ~/.config/fish/, which may not exist yet
+        if let Some(parent) = t.file.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let mut existing = fs::read_to_string(&t.file).unwrap_or_default();
+
+        // An older jolta put both blocks in one file (.zshrc for zsh). Leaving
+        // its PATH block behind is not harmless: that copy is unguarded, so it
+        // would prepend a second set of shims on top of the one .zprofile has
+        // already put there. Move the block rather than duplicate it.
+        let drop_path = !t.path_block && existing.contains(PATH_START);
+        let drop_hook = !t.hook_block && existing.contains(HOOK_START);
+        if drop_path || drop_hook {
+            let pruned = strip_blocks(&existing, drop_path, drop_hook);
+            if fs::write(&t.file, &pruned).is_ok() {
+                println!("{} moved jolta's old lines out of {}", ok_mark(), t.file.display());
+                existing = pruned;
+                changed = true;
+            }
+        }
+
+        let mut additions = String::new();
+        if t.path_block {
+            if existing.contains(PATH_START) {
+                println!("{} PATH setup already in {}", ok_mark(), t.file.display());
+            } else {
+                additions.push_str(&path_block(&shell));
+                println!("{} added PATH setup to {}", ok_mark(), t.file.display());
+            }
+        }
+        if t.hook_block {
+            if existing.contains(HOOK_START) {
+                println!("{} JAVA_HOME hook already in {}", ok_mark(), t.file.display());
+            } else {
+                additions.push_str(&hook_block(&shell));
+                println!("{} added JAVA_HOME hook to {}", ok_mark(), t.file.display());
+            }
+        }
+        if additions.is_empty() {
+            continue;
+        }
+        // Each block opens with a blank line to stand off from what precedes
+        // it; in a file we are creating there is nothing to stand off from.
+        if existing.trim().is_empty() {
+            additions = additions.trim_start_matches('\n').to_string();
+        }
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&t.file)
+            .unwrap_or_else(|e| die(&format!("cannot open {}: {e}", t.file.display())));
+        f.write_all(additions.as_bytes())
+            .unwrap_or_else(|e| die(&format!("cannot write {}: {e}", t.file.display())));
+        changed = true;
+    }
+    if !hooked {
+        println!(
+            "{} no JAVA_HOME hook for {shell} — the shims are on PATH, so java/javac follow \
+             the pin, but JAVA_HOME is yours to set (e.g. export JAVA_HOME=$(jolta home))",
+            warn_mark()
+        );
+    }
+    changed
 }
 
 pub fn cmd_pin(rest: &[String]) {
@@ -811,8 +1045,12 @@ pub fn cmd_hook(shell: &str) {
         "zsh" => print!("{HOOK_COMMON}{}", include_str!("hooks/zsh.sh")),
         "bash" => print!("{HOOK_COMMON}{}", include_str!("hooks/bash.sh")),
         "fish" => print!("{}", include_str!("hooks/fish.fish")),
+        "nu" => print!("{}", include_str!("hooks/nu.nu")),
         "powershell" | "pwsh" => print!("{}", include_str!("hooks/powershell.ps1")),
-        other => die(&format!("no hook available for shell '{other}' (zsh, bash, fish, and powershell are supported)")),
+        other => {
+            debug_assert!(!has_hook(other), "has_hook() claims a dialect cmd_hook does not have");
+            die(&format!("no hook available for shell '{other}' (zsh, bash, fish, nu, and powershell are supported)"))
+        }
     }
 }
 
@@ -1573,13 +1811,20 @@ pub fn cmd_prune(rest: &[String]) {
 
 pub fn cmd_implode(args: &[String]) {
     let home = jolta_home();
-    let profile = profile_file();
+    // The same files setup writes to, so implode cleans every one of them —
+    // for zsh that is .zprofile and .zshrc, for bash both the login file and
+    // .bashrc. A csh user has no targets and gets the generic wording.
+    #[cfg(unix)]
+    let profiles: Vec<PathBuf> = profile_targets().into_iter().map(|t| t.file).collect();
+    #[cfg(windows)]
+    let profiles: Vec<PathBuf> = platform::ps_profiles();
     if args.first().map(String::as_str) != Some("--yes") {
-        println!(
-            "This removes {} and the jolta lines from {}.",
-            home.display(),
-            profile.display()
-        );
+        let list = if profiles.is_empty() {
+            "your shell profile".to_string()
+        } else {
+            profiles.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" and ")
+        };
+        println!("This removes {} and the jolta lines from {list}.", home.display());
         let managed = list_managed();
         if managed.is_empty() {
             println!("No jolta-installed JDKs to delete.");
@@ -1600,9 +1845,8 @@ pub fn cmd_implode(args: &[String]) {
     }
     #[cfg(windows)]
     {
-        let _ = &profile;
-        for p in platform::ps_profiles() {
-            strip_jolta_blocks(&p);
+        for p in &profiles {
+            strip_jolta_blocks(p);
         }
         match platform::remove_user_path(&[shims_dir(), home.join("bin")]) {
             Some(true) => println!("{} removed jolta from your user PATH", ok_mark()),
@@ -1614,7 +1858,9 @@ pub fn cmd_implode(args: &[String]) {
         }
     }
     #[cfg(unix)]
-    strip_jolta_blocks(&profile);
+    for p in &profiles {
+        strip_jolta_blocks(p);
+    }
     // java_home ignores dangling entries, so this is tidiness rather than
     // repair: uninstalling jolta shouldn't leave jolta-named junk behind in a
     // directory the user (and other JDK tools) look at
@@ -1707,24 +1953,42 @@ pub fn cmd_toolchains(rest: &[String]) {
     );
 }
 
-/// Remove jolta's marked blocks (PATH + hook) from a profile file. Used by
-/// implode for the shell profile and, on Windows, the PowerShell profiles.
-fn strip_jolta_blocks(profile: &Path) {
-    let Ok(text) = fs::read_to_string(profile) else { return };
-    let mut out = String::new();
+/// Drop jolta's marked blocks from profile text. `path` and `hook` select
+/// which, so a migration can lift one block out of a file and leave the other.
+/// The blank line jolta writes above a block goes with it, so repeated
+/// add/strip cycles don't pile up empty lines.
+fn strip_blocks(text: &str, path: bool, hook: bool) -> String {
+    let mut out: Vec<&str> = Vec::new();
     let mut skipping = false;
     for line in text.lines() {
-        if line.contains("# >>> jolta hook") || line.contains("# >>> jolta >>>") {
-            skipping = true;
+        if !skipping {
+            let starts_hook = line.contains(HOOK_START);
+            let starts_path = !starts_hook && line.contains(PATH_START);
+            if (starts_hook && hook) || (starts_path && path) {
+                skipping = true;
+                if out.last().is_some_and(|l| l.trim().is_empty()) {
+                    out.pop();
+                }
+            }
         }
         if !skipping {
-            out.push_str(line);
-            out.push('\n');
-        }
-        if line.contains("# <<< jolta hook <<<") || line.contains("# <<< jolta <<<") {
+            out.push(line);
+        } else if (hook && line.contains(HOOK_END)) || (path && line.contains(PATH_END)) {
             skipping = false;
         }
     }
+    let mut out = out.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+/// Remove both of jolta's marked blocks from a profile file. Used by implode
+/// for the shell profiles and, on Windows, the PowerShell profiles.
+fn strip_jolta_blocks(profile: &Path) {
+    let Ok(text) = fs::read_to_string(profile) else { return };
+    let out = strip_blocks(&text, true, true);
     if out != text && fs::write(profile, out).is_ok() {
         println!("{} removed jolta lines from {}", ok_mark(), profile.display());
     }
@@ -1813,6 +2077,18 @@ pub fn cmd_doctor(fix: bool) -> i32 {
         }
     } else {
         println!("  shims:         {} MISSING — run \"jolta setup\"", bad_mark());
+        rc = 1;
+        needs_reshim = true;
+    }
+
+    // nu sources hook.nu by literal path, so a missing file is a parse error
+    // at every nu startup rather than a hook that quietly does nothing
+    if shell_name() == "nu" && !nu_hook_file().is_file() {
+        println!(
+            "  nu hook file:  {} MISSING ({}) — run \"jolta reshim\"",
+            bad_mark(),
+            nu_hook_file().display()
+        );
         rc = 1;
         needs_reshim = true;
     }

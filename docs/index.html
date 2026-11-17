@@ -114,7 +114,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
       "name": "How do I remove it?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "jolta implode removes ~/.jolta and the jolta lines from your shell profile, after a confirmation that lists exactly which JDKs will be deleted. JDKs you installed outside jolta are never touched."
+        "text": "jolta implode removes ~/.jolta and the jolta lines from your shell startup files, after a confirmation that lists exactly which JDKs will be deleted. JDKs you installed outside jolta are never touched."
       }
     }
   ]
@@ -369,7 +369,7 @@ the <a href="manual.html"><strong>full manual</strong></a>.</p>
 
 <h2 id="uninstall">Uninstall</h2>
 <pre><code>jolta implode</code></pre>
-<p>Removes <code>~/.jolta</code> and the jolta lines from your shell profile, after a
+<p>Removes <code>~/.jolta</code> and the jolta lines from your shell startup files, after a
 confirmation prompt that lists exactly which jolta-installed JDKs will be deleted.
 JDKs installed outside jolta and your <code>.java-version</code> files are never touched.
 jolta only ever deletes what it downloaded itself.</p>

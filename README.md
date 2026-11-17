@@ -61,8 +61,13 @@ cargo build --release && ./target/release/jolta setup
 
 `setup` installs a self-contained copy of jolta into `~/.jolta` (you can delete the
 clone afterward), generates shims for every JDK it can find, and appends two small
-marked blocks to your shell profile: one putting `~/.jolta/shims` on your `PATH`, one
-enabling the `JAVA_HOME` shell hook. Open a new shell and run `jolta doctor` to verify.
+marked blocks to your shell startup files: one putting `~/.jolta/shims` on your `PATH`,
+one enabling the `JAVA_HOME` shell hook. The two go in different files, because they
+need different things — the `PATH` block in a file read once per login session
+(`~/.zprofile` for zsh), the hook in one read by every interactive shell
+(`~/.zshrc`), since it installs pre-prompt handlers. See
+[Shell startup files](docs/manual.html#shell-files) for the per-shell table.
+Open a new shell and run `jolta doctor` to verify.
 Re-running setup from a newer build upgrades the installed copy.
 
 **Windows:** download `jolta-x86_64-pc-windows-msvc.zip` from the
@@ -88,7 +93,7 @@ environment variables.
 jolta implode
 ```
 
-Removes `~/.jolta` and the jolta lines from your shell profile, after a
+Removes `~/.jolta` and the jolta lines from your shell startup files, after a
 confirmation prompt that lists exactly which jolta-installed JDKs will be
 deleted. JDKs installed outside jolta (Homebrew, `/Library/Java`, SDKMAN, ...)
 and your `.java-version` files are never touched — jolta only ever deletes
@@ -254,7 +259,7 @@ Every command has a detailed page with examples: **`jolta help <command>`**.
 | `jolta exec <cmd>` | Run any command with `JAVA_HOME`/`PATH` set for this project |
 | `jolta env` | Print `export` lines for `eval "$(jolta env)"` |
 | `jolta home` | Print the resolved `JAVA_HOME` for this directory |
-| `jolta hook [shell]` | Print the shell hook (zsh, bash, fish, powershell) |
+| `jolta hook [shell]` | Print the shell hook (zsh, bash, fish, nu, powershell) |
 | `jolta completions [shell]` | Print tab-completions (zsh, bash, fish) |
 | `jolta toolchains [--write]` | Maven `toolchains.xml` (+ Gradle hint) from installed JDKs |
 | `jolta mirror sync\|verify` | Build or re-hash an offline JDK mirror |
@@ -269,7 +274,7 @@ Two mechanisms keep `JAVA_HOME` correct:
 1. **Shims** export `JAVA_HOME` for everything they exec — any process started
    through `java`, `javac`, etc. sees the right value.
 2. **The shell hook** (installed by `jolta setup`, via `eval "$(jolta hook zsh)"` —
-   zsh, bash, fish, and PowerShell) re-resolves `JAVA_HOME` in your interactive
+   zsh, bash, fish, nu, and PowerShell) re-resolves `JAVA_HOME` in your interactive
    shell whenever the pin in effect changes. This covers
    tools that read `JAVA_HOME` directly instead of running `java` from `PATH` —
    Maven, Gradle, IDEs launched from a terminal. If a pin can't be satisfied, the

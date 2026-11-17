@@ -356,6 +356,126 @@ out=$(jolta pin banana 2>&1) && rc=0 || rc=$?
 [ "$rc" -ne 0 ] && [ ! -f .java-version ] && { pass=$((pass+1)); echo "ok   garbage pin rejected"; } \
   || { fail=$((fail+1)); echo "FAIL garbage pin rejected (got: $out)"; }
 
+# 16k. shell startup files: the PATH block and the hook go in different files,
+# an older jolta's PATH block is MOVED not duplicated, the prepend is guarded
+# against a file read twice, and shells with no hook dialect say so.
+sf=$(mktemp -d)
+mkdir -p "$sf/h"
+# a user upgrading: both old-style blocks in .zshrc, unguarded prepend
+printf '# keep me\n\n# >>> jolta >>>\nexport JOLTA_HOME="$HOME/.jolta"\nexport PATH="$JOLTA_HOME/shims:$JOLTA_HOME/bin:$PATH"\n# <<< jolta <<<\n\n# >>> jolta hook (keeps JAVA_HOME in sync with the pin in effect) >>>\neval "$(jolta hook zsh)"\n# <<< jolta hook <<<\n' > "$sf/.zshrc"
+HOME="$sf" JOLTA_HOME="$sf/h" SHELL=/bin/zsh JOLTA_NO_BANNER=1 "$JOLTA_BIN" setup >/dev/null 2>&1
+check "zsh PATH block lands in .zprofile" 'JOLTA_HOME/shims' "$(cat "$sf/.zprofile" 2>&1)"
+check "zsh hook stays in .zshrc" 'jolta hook zsh' "$(cat "$sf/.zshrc")"
+check "zsh .zshrc keeps the user's own lines" 'keep me' "$(cat "$sf/.zshrc")"
+if grep -q '>>> jolta >>>' "$sf/.zshrc"; then
+  fail=$((fail+1)); echo "FAIL old PATH block moved out of .zshrc"
+else
+  pass=$((pass+1)); echo "ok   old PATH block moved out of .zshrc"
+fi
+if grep -q 'jolta hook' "$sf/.zprofile"; then
+  fail=$((fail+1)); echo "FAIL hook line not written to .zprofile"
+else
+  pass=$((pass+1)); echo "ok   hook line not written to .zprofile"
+fi
+# The guard: sourcing the block twice must leave ONE copy of the shims on PATH.
+# Count the isolated HOME's path exactly — the tester's own ~/.jolta/shims is
+# very likely on PATH as well, and a loose pattern would count that too.
+dup=$(HOME="$sf" sh -c '. "$1/.zprofile"; . "$1/.zprofile"; printf "%s" "$PATH"' _ "$sf" \
+      | tr ":" "\n" | grep -cFx "$sf/.jolta/shims" || true)
+check "PATH prepend is guarded against a second read" '^1$' "$dup"
+rm -rf "$sf"
+
+# bash has no single file covering macOS login / Linux terminal / ssh, so both
+# blocks go in both the login file and .bashrc
+sfb=$(mktemp -d); mkdir -p "$sfb/h"; : > "$sfb/.bash_profile"
+HOME="$sfb" JOLTA_HOME="$sfb/h" SHELL=/bin/bash JOLTA_NO_BANNER=1 "$JOLTA_BIN" setup >/dev/null 2>&1
+check "bash PATH block in .bash_profile" 'JOLTA_HOME/shims' "$(cat "$sfb/.bash_profile")"
+check "bash hook in .bash_profile" 'jolta hook bash' "$(cat "$sfb/.bash_profile")"
+check "bash PATH block in .bashrc too" 'JOLTA_HOME/shims' "$(cat "$sfb/.bashrc")"
+check "bash hook in .bashrc too" 'jolta hook bash' "$(cat "$sfb/.bashrc")"
+# ~/.bash_profile must never be CREATED: it would shadow ~/.profile for login shells
+rm -rf "$sfb"; sfb=$(mktemp -d); mkdir -p "$sfb/h"
+HOME="$sfb" JOLTA_HOME="$sfb/h" SHELL=/bin/bash JOLTA_NO_BANNER=1 "$JOLTA_BIN" setup >/dev/null 2>&1
+if [ -f "$sfb/.bash_profile" ]; then
+  fail=$((fail+1)); echo "FAIL setup did not create ~/.bash_profile"
+else
+  pass=$((pass+1)); echo "ok   setup did not create ~/.bash_profile"
+fi
+check "bash falls back to .profile" 'JOLTA_HOME/shims' "$(cat "$sfb/.profile")"
+rm -rf "$sfb"
+
+# a shell with no hook dialect gets the PATH block and an honest note, never an
+# "eval $(jolta hook ksh)" line that cmd_hook would die on
+sfk=$(mktemp -d); mkdir -p "$sfk/h"
+out=$(HOME="$sfk" JOLTA_HOME="$sfk/h" SHELL=/bin/ksh JOLTA_NO_BANNER=1 "$JOLTA_BIN" setup 2>&1)
+check "ksh gets the PATH block" 'JOLTA_HOME/shims' "$(cat "$sfk/.profile")"
+check "ksh is told there is no hook" 'no JAVA_HOME hook for ksh' "$out"
+if grep -q 'jolta hook' "$sfk/.profile"; then
+  fail=$((fail+1)); echo "FAIL no hook line written for ksh"
+else
+  pass=$((pass+1)); echo "ok   no hook line written for ksh"
+fi
+rm -rf "$sfk"
+
+# csh is not POSIX: write nothing, print setenv lines to add by hand
+sfc=$(mktemp -d); mkdir -p "$sfc/h"
+out=$(HOME="$sfc" JOLTA_HOME="$sfc/h" SHELL=/bin/csh JOLTA_NO_BANNER=1 "$JOLTA_BIN" setup 2>&1)
+check "csh gets setenv instructions" 'setenv JOLTA_HOME' "$out"
+if [ -f "$sfc/.profile" ] || [ -f "$sfc/.cshrc" ]; then
+  fail=$((fail+1)); echo "FAIL csh: no profile file written"
+else
+  pass=$((pass+1)); echo "ok   csh: no profile file written"
+fi
+rm -rf "$sfc"
+
+# 16l. nushell: PATH block in env.nu, the hook as a source line in config.nu,
+# the generated hook file, and the list-prepend guard. nu's config directory is
+# platform-specific, so ask nu where it is exactly as setup does.
+if command -v nu >/dev/null 2>&1; then
+  nt=$(mktemp -d)
+  HOME="$nt" JOLTA_HOME="$nt/.jolta" SHELL="$(command -v nu)" JOLTA_NO_BANNER=1 "$JOLTA_BIN" setup >/dev/null 2>&1
+  nenv=$(HOME="$nt" nu --no-config-file -c '$nu.env-path')
+  ncfg=$(HOME="$nt" nu --no-config-file -c '$nu.config-path')
+  check "nu PATH block in env.nu" 'not-in \$env.PATH' "$(cat "$nenv" 2>&1)"
+  check "nu hook sources the generated file" 'source ~/.jolta/hook.nu' "$(cat "$ncfg" 2>&1)"
+  check "nu env.nu parses" 'true' "$(HOME="$nt" nu --no-config-file -c "nu-check --debug '$nenv'" 2>&1)"
+  check "nu hook.nu parses" 'true' "$(HOME="$nt" nu --no-config-file -c "nu-check --debug '$nt/.jolta/hook.nu'" 2>&1)"
+  ndup=$(HOME="$nt" nu --no-config-file -c \
+         "source \"$nenv\"; source \"$nenv\"; \$env.PATH | where \$it =~ '^$nt' | length | into string" 2>/dev/null || echo X)
+  check "nu PATH prepend is guarded" '^2$' "$ndup"
+  # nu sources hook.nu by literal path, so a missing file is a parse error at
+  # every startup — reshim has to put it back
+  rm -f "$nt/.jolta/hook.nu"
+  HOME="$nt" JOLTA_HOME="$nt/.jolta" "$JOLTA_BIN" reshim >/dev/null 2>&1
+  [ -f "$nt/.jolta/hook.nu" ] && { pass=$((pass+1)); echo "ok   reshim restores nu hook file"; } \
+    || { fail=$((fail+1)); echo "FAIL reshim restores nu hook file"; }
+  HOME="$nt" JOLTA_HOME="$nt/.jolta" SHELL="$(command -v nu)" "$JOLTA_BIN" implode --yes >/dev/null 2>&1
+  if grep -q jolta "$nenv" "$ncfg" 2>/dev/null; then
+    fail=$((fail+1)); echo "FAIL implode cleaned nu's config files"
+  else
+    pass=$((pass+1)); echo "ok   implode cleaned nu's config files"
+  fi
+  rm -rf "$nt"
+else
+  echo "skip nushell tests (nu not installed)"
+fi
+
+# 16m. fish: the generated block and the hook must parse in real fish, and the
+# `contains` guard must hold against a second read.
+if command -v fish >/dev/null 2>&1; then
+  ft=$(mktemp -d)
+  HOME="$ft" JOLTA_HOME="$ft/.jolta" SHELL="$(command -v fish)" JOLTA_NO_BANNER=1 "$JOLTA_BIN" setup >/dev/null 2>&1
+  fcf="$ft/.config/fish/config.fish"
+  check "fish config.fish parses" '^OK$' "$(HOME="$ft" fish -n "$fcf" >/dev/null 2>&1 && echo OK || echo BAD)"
+  "$JOLTA_BIN" hook fish > "$ft/h.fish"
+  check "fish hook parses" '^OK$' "$(HOME="$ft" fish -n "$ft/h.fish" >/dev/null 2>&1 && echo OK || echo BAD)"
+  fdup=$(HOME="$ft" fish -c "source $fcf; source $fcf; string match -r '^$ft' \$PATH | count" 2>/dev/null || echo X)
+  check "fish PATH prepend is guarded" '^2$' "$fdup"
+  rm -rf "$ft"
+else
+  echo "skip fish tests (fish not installed)"
+fi
+
 # 17. auto-install: pinning an uninstalled major downloads it (network, opt-in)
 if [ "${JOLTA_TEST_NETWORK:-}" = "1" ]; then
   want=25
